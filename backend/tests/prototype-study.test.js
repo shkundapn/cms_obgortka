@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const C = require('../prototype/study-core.js');
+const C = require('../../frontend/prototype/study-core.js');
 test('study days follow Kyiv midnight', () => {
   assert.equal(C.dateKey('2026-11-18T22:30:00Z'), '2026-11-19');
   assert.equal(C.dateKey('2026-07-18T21:30:00Z'), '2026-07-19');
@@ -46,9 +46,12 @@ test('the fire builds towards the source deadline and stays off for completed wo
   const due = 100 * hour;
   const at = hours => due - hours * hour;
   assert.equal(C.deadlineWarmth(due, false, at(73)), 0);
-  assert.equal(C.deadlineWarmth(due, false, at(72)), 0);
+  assert.equal(C.deadlineWarmth(due, false, at(72.001)), 0);
+  const firstTint = C.deadlineWarmth(due, false, at(72));
+  assert.ok(firstTint > 0 && firstTint < C.deadlineWarmth(due, false, at(48)));
+  assert.equal(C.deadlineHeat(due, false, at(72)), 0);
   assert.equal(C.deadlineHeat(due, false, at(24)), 0);
-  let previousWarmth = 0, previousHeat = 0;
+  let previousWarmth = firstTint, previousHeat = 0;
   for (const hours of [71.9, 58.2, 39.7, 24, 23.8, 19.07, 12.36, 5.13, 2.6, .01]) {
     const warmth = C.deadlineWarmth(due, false, at(hours));
     const heat = C.deadlineHeat(due, false, at(hours));

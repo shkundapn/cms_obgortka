@@ -134,3 +134,29 @@ def test_upload_only_course_keeps_its_existing_topic_reader():
     assert build_course_map({"sections": [], "topic_mixes": []}) is None
     assert build_course_map({"course": {"source_type": "manual_upload"}, "sections": [{"id": 1, "name": "Власний текст", "modules": []}], "topic_mixes": []}) is None
 
+
+def test_course_map_sets_book_status_for_empty_and_ready_topics():
+    from app.services.course_structure import build_course_map
+    bundle = {
+        "course": {"source_type": "moodle_sync"},
+        "tools_config": {"interactive_book": True},
+        "sections": [
+            {"id": 1, "name": "Тема 1", "modules": [{"id": 10, "name": "Скан без тексту", "modname": "resource"}]},
+            {"id": 2, "name": "Тема 2", "modules": [{"id": 20, "name": "Лекція з текстом", "modname": "resource"}]},
+            {"id": 3, "name": "Тема 3", "modules": [{"id": 30, "name": "Тест", "modname": "quiz"}]},
+        ],
+        "snapshots": [
+            {"source_id": "s1", "title": "Тема 1", "content_text": "", "safety_status": "safe_material"},
+            {"source_id": "s2", "title": "Тема 2", "content_text": "Повний текст лекції про ймовірність та випадкові величини.", "safety_status": "safe_material"},
+        ],
+        "topic_mixes": [
+            {"mix_id": "m1", "topic_index": 1, "title": "Тема 1", "source_id": "s1", "book_sections": []},
+            {"mix_id": "m2", "topic_index": 2, "title": "Тема 2", "source_id": "s2", "book_sections": []},
+        ],
+    }
+    cmap = build_course_map(bundle)
+    statuses = {n["title"]: n["book_status"] for n in cmap["nodes"]}
+    assert statuses["Тема 1"] == "insufficient_source"
+    assert statuses["Тема 2"] == "not_generated"
+    assert statuses["Тема 3"] == "non_study"
+

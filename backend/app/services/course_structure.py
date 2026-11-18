@@ -78,6 +78,8 @@ def _model(value):
 def build_course_map(bundle):
     sections = normalize_sections(bundle.get("sections", []))
     mixes = [_model(m) for m in bundle.get("topic_mixes", [])]
+    snapshots = [_model(s) for s in bundle.get("snapshots", [])]
+    tools_cfg = _model(bundle.get("tools_config")) or {}
     if not sections or (_model(bundle.get("course")) or {}).get("source_type") == "manual_upload":
         # Upload-only courses use their existing TopicMix reader, not an empty Moodle map.
         return None
@@ -185,4 +187,22 @@ def build_course_map(bundle):
         node["flashcards"] = [f for f in (own_mix or {}).get("flashcards", []) if not re.search(r"Key Concept #|Core concepts covered", f.get("front", "") + f.get("back", ""))]
         node["material_count"] = sum(m["modname"] not in {"label", "subsection"} for m in node["materials"])
         node["learnable"] = node["kind"] == "topic" and bool(node["material_count"] or blocks)
+        snap = next((s for s in snapshots if own_mix and s.get("source_id") == own_mix.get("source_id")), None)
+        if snap is None:
+            snap = next((s for s in snapshots if clean_text(s.get("title", "")).casefold() == node["title"].casefold()), None)
+        study_mods = [m for m in node["materials"] if m.get("modname") not in {"label", "subsection", "quiz", "assign", "forum"}]
+        has_youtube = any("youtu" in str(m.get("url") or "").lower() for m in study_mods)
+        has_text = len(((snap or {}).get("content_text") or "").strip()) >= 40 or any(len(clean_text(m.get("description") or "")) >= 40 for m in study_mods)
+        if blocks:
+            node["book_status"] = "ready"
+        elif (snap or {}).get("safety_status") == "restricted_exam":
+            node["book_status"] = "restricted"
+        elif node["kind"] in {"info", "archive"} or not study_mods:
+            node["book_status"] = "non_study"
+        elif not tools_cfg.get("interactive_book", True):
+            node["book_status"] = "disabled"
+        elif own_mix and (has_text or has_youtube):
+            node["book_status"] = "not_generated"
+        else:
+            node["book_status"] = "insufficient_source"
     return {"version": 1, "nodes": nodes, "roots": [n["id"] for n in nodes if n["parent_id"] is None]}

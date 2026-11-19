@@ -585,7 +585,7 @@
     nav.querySelector('[data-nav="plan"] span').textContent = 'Мій огляд';
     nav.querySelector('[data-nav="courses"] span').textContent = 'Мої предмети';
     const settings = nav.querySelector('[data-nav="settings"]');
-    settings.insertAdjacentHTML('beforebegin', `<a href="#calendar" data-nav="calendar">${icon('calendar')}<span>Календар</span></a>`);
+    settings.insertAdjacentHTML('beforebegin', `<a href="#calendar" data-nav="calendar">${icon('calendar')}<span>Календар</span></a><a href="#anki" data-nav="anki">${icon('practice')}<span>Картки Anki</span></a>`);
     document.querySelector('.topbar-account').insertAdjacentHTML('beforebegin', `<div class="timer-menu">
       <button type="button" class="persistent-timer" id="persistent-timer" aria-expanded="false" aria-controls="timer-menu-panel">${icon('clock')}<span>Pomodoro</span></button>
       <button type="button" class="icon-button timer-quick" data-timer-toggle hidden></button>

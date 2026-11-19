@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    "daily_limit": 20,
+    "daily_limit": 100,
     "course_ids": [],
     "include_learned": True,
     "include_new": True,
@@ -95,7 +95,7 @@ def ensure_anki_tables(store: Any) -> None:
             """
             CREATE TABLE IF NOT EXISTS anki_settings (
                 owner_id TEXT PRIMARY KEY,
-                daily_limit INTEGER NOT NULL DEFAULT 20,
+                daily_limit INTEGER NOT NULL DEFAULT 100,
                 course_ids_json TEXT NOT NULL DEFAULT '[]',
                 include_learned INTEGER NOT NULL DEFAULT 1,
                 include_new INTEGER NOT NULL DEFAULT 1,

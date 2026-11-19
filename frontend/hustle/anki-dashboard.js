@@ -379,10 +379,44 @@
     ['easy', 'Легко', '4'],
   ];
 
+  function renderStudyFace(card, answer) {
+    const titleId = answer ? 'anki-answer-label' : 'anki-question-label';
+    const hidden = studyState.revealed !== answer ? 'inert aria-hidden="true"' : '';
+    return `
+      <section class="anki-card-face ${answer ? 'anki-card-back' : 'anki-card-front'}" aria-labelledby="${titleId}" ${hidden}>
+        <header class="anki-face-header">
+          <h2 class="anki-face-label" id="${titleId}" tabindex="-1">${answer ? 'Відповідь' : 'Питання'}</h2>
+          <button type="button" class="anki-learn-toggle" data-anki-toggle-learned="${esc(card.id)}"
+                  data-learned="${card.isLearned ? '1' : '0'}" aria-pressed="${Boolean(card.isLearned)}">
+            ${icon(card.isLearned ? 'check' : 'bookmark')} ${card.isLearned ? 'Вивчена' : 'Позначити як вивчену'}
+          </button>
+        </header>
+        ${answer ? `<div class="anki-back-prompt">${renderInline(card.front)}</div>` : ''}
+        <div class="anki-face-content reader-prose">${renderRich(answer ? card.back : card.front)}</div>
+        ${answer && card.sourceCitation ? `<div class="anki-citation">Джерело · ${esc(card.sourceCitation)}</div>` : ''}
+      </section>`;
+  }
+
+  function renderStudyDock(card, session) {
+    if (!studyState.revealed) {
+      return `<button type="button" class="primary anki-reveal-btn" data-anki-study-reveal aria-keyshortcuts="Space">
+        Показати відповідь <kbd aria-hidden="true">Space</kbd>
+      </button>`;
+    }
+    const preview = engine()?.getSchedulingPreview(card, activeConfig(session));
+    return `
+      <div class="anki-rating-grid anki-study-ratings" role="group" aria-label="Оцінка відповіді">
+        ${ratings.map(([key, label, shortcut]) => `
+          <button type="button" class="anki-rate-btn ${key}" data-anki-study-rate="${key}" aria-keyshortcuts="${shortcut}" ${studyState.busy ? 'disabled' : ''}>
+            <span class="anki-rate-label">${label}</span>
+            <span class="anki-rate-int">${esc(preview?.[key]?.intervalLabelUk || preview?.[key]?.intervalLabel || '')}</span>
+            <kbd aria-hidden="true">${shortcut}</kbd>
+          </button>`).join('')}
+      </div>`;
+  }
+
   function renderStudyView(host, session, focusTarget) {
     if (!host || !host.isConnected || !session) return;
-    const srs = engine();
-    const cfg = activeConfig(session);
     const total = studyState.queue.length;
     const card = studyState.queue[studyState.idx] || null;
     const courseName = studyState.courseId !== null
@@ -417,10 +451,8 @@
       return;
     }
 
-    const preview = srs ? srs.getSchedulingPreview(card, cfg) : null;
     const progressPct = Math.round(((studyState.idx + (studyState.revealed ? 0.5 : 0)) / total) * 100);
     const cardPosition = `Картка ${studyState.idx + 1} з ${total}`;
-    const revealed = studyState.revealed;
 
     host.innerHTML = `
       <div class="anki-study-shell" data-anki-study-view>
@@ -440,33 +472,14 @@
           </div>
         </div>
 
-        <section class="anki-card-face ${revealed ? 'anki-card-back' : 'anki-card-front'}" aria-labelledby="anki-face-label">
-          <header class="anki-face-header">
-            <h2 class="anki-face-label" id="anki-face-label" tabindex="-1">${revealed ? 'Відповідь' : 'Питання'}</h2>
-            <button type="button" class="anki-learn-toggle" data-anki-toggle-learned="${esc(card.id)}"
-                    data-learned="${card.isLearned ? '1' : '0'}" aria-pressed="${Boolean(card.isLearned)}">
-              ${icon(card.isLearned ? 'check' : 'bookmark')} ${card.isLearned ? 'Вивчена' : 'Позначити як вивчену'}
-            </button>
-          </header>
-          ${revealed ? `<div class="anki-back-prompt">${renderInline(card.front)}</div>` : ''}
-          <div class="anki-face-content reader-prose">${renderRich(revealed ? card.back : card.front)}</div>
-          ${revealed && card.sourceCitation ? `<div class="anki-citation">Джерело · ${esc(card.sourceCitation)}</div>` : ''}
-        </section>
-
-        <div class="anki-study-dock">
-          ${revealed ? `
-            <div class="anki-rating-grid anki-study-ratings" role="group" aria-label="Оцінка відповіді">
-              ${ratings.map(([key, label, shortcut]) => `
-                <button type="button" class="anki-rate-btn ${key}" data-anki-study-rate="${key}" aria-keyshortcuts="${shortcut}" ${studyState.busy ? 'disabled' : ''}>
-                  <span class="anki-rate-label">${label}</span>
-                  <span class="anki-rate-int">${esc(preview?.[key]?.intervalLabelUk || preview?.[key]?.intervalLabel || '')}</span>
-                  <kbd aria-hidden="true">${shortcut}</kbd>
-                </button>`).join('')}
-            </div>` : `
-            <button type="button" class="primary anki-reveal-btn" data-anki-study-reveal aria-keyshortcuts="Space">
-              Показати відповідь <kbd aria-hidden="true">Space</kbd>
-            </button>`}
+        <div class="anki-flip-stage">
+          <div class="anki-flip-card ${studyState.revealed ? 'is-flipped' : ''}" data-anki-flip-card>
+            ${renderStudyFace(card, false)}
+            ${renderStudyFace(card, true)}
+          </div>
         </div>
+
+        <div class="anki-study-dock">${renderStudyDock(card, session)}</div>
       </div>
     `;
     UI.enhance?.(host);
@@ -518,7 +531,7 @@
       studyState.revealed = false;
       studyState.cardStartedAt = Date.now();
       studyState.busy = false;
-      renderStudyView(activePageHost, lastSession, '#anki-face-label');
+      renderStudyView(activePageHost, lastSession, '#anki-question-label');
       if (activeDashboardHost?.isConnected) drawDashboardWidget(activeDashboardHost, lastSession);
     } catch (err) {
       studyState.busy = false;
@@ -647,6 +660,7 @@
 
     const form = body.querySelector('[data-anki-calibration-form]');
     let manualNewOverride = false;
+    let manualDailyOverride = false;
 
     form.addEventListener('invalid', event => {
       const drawer = event.target.closest('details');
@@ -671,6 +685,9 @@
         if (!manualNewOverride) {
           form.elements.new_cards_limit.value = String(nextCal.newCardsLimit);
         }
+        if (!manualDailyOverride) {
+          form.elements.daily_limit.value = String(Math.min(500, Math.max(100, nextCal.totalDailyCapacity)));
+        }
         form.querySelector('[data-cal-preview] strong').textContent = nextCal.newCardsLimit;
       }
     }
@@ -678,6 +695,8 @@
     form.addEventListener('input', (e) => {
       if (e.target === form.elements.new_cards_limit) {
         manualNewOverride = true;
+      } else if (e.target === form.elements.daily_limit) {
+        manualDailyOverride = true;
       } else {
         recalibrateLive();
       }
@@ -801,8 +820,24 @@
   // 5. Event Listeners, Keyboard Navigation & Public Mount API
   // ==========================================================================
   function revealStudyCard() {
+    if (studyState.revealed) return;
+    const flip = activePageHost?.querySelector('[data-anki-flip-card]');
+    if (!flip) return;
+
     studyState.revealed = true;
-    renderStudyView(activePageHost, lastSession, '#anki-face-label');
+    const front = flip.querySelector('.anki-card-front');
+    const back = flip.querySelector('.anki-card-back');
+    front.inert = true;
+    front.setAttribute('aria-hidden', 'true');
+    back.inert = false;
+    back.removeAttribute('aria-hidden');
+    flip.classList.add('is-flipped');
+
+    activePageHost.querySelector('.anki-progress-bar').value =
+      Math.round(((studyState.idx + 0.5) / studyState.queue.length) * 100);
+    const card = studyState.queue[studyState.idx];
+    activePageHost.querySelector('.anki-study-dock').innerHTML = renderStudyDock(card, lastSession);
+    back.querySelector('.anki-face-label').focus({ preventScroll: true });
   }
 
   function bindSharedHandlers(host) {
@@ -834,6 +869,12 @@
         return;
       }
 
+      if (!studyState.revealed && event.target.closest('.anki-card-front')
+          && !event.target.closest('button, a, code, pre, kbd') && document.getSelection()?.isCollapsed !== false) {
+        revealStudyCard();
+        return;
+      }
+
       const rateBtn = event.target.closest('[data-anki-study-rate]');
       if (rateBtn) {
         await submitStudyRating(rateBtn.dataset.ankiStudyRate);
@@ -855,7 +896,9 @@
           if (studyState.queue[studyState.idx]?.id === key) {
             studyState.queue[studyState.idx].isLearned = nextLearned;
           }
-          if (activePageHost?.querySelector('[data-anki-study-view]')) renderStudyView(activePageHost, lastSession, '[data-anki-toggle-learned]');
+          if (activePageHost?.querySelector('[data-anki-study-view]')) {
+            renderStudyView(activePageHost, lastSession, '.anki-card-face:not([inert]) [data-anki-toggle-learned]');
+          }
           else if (activePageHost?.querySelector('[data-anki-overview-page]')) renderCourseOverviewPage(activePageHost, lastSession);
           if (activeDashboardHost?.isConnected) drawDashboardWidget(activeDashboardHost, lastSession);
           UI.toast?.(nextLearned ? 'Позначено як вивчену для Anki.' : 'Позначку вивченої знято.');

@@ -552,6 +552,7 @@ html:has(#workspace-main[data-view="anki"]) {
 .anki-learned-meta { color: var(--anki-quiet); font-size: .76rem; }
 
 .anki-study-shell {
+  width: 100%;
   max-width: 47rem;
   margin-inline: auto;
   color: var(--anki-ink);
@@ -607,6 +608,24 @@ html:has(#workspace-main[data-view="anki"]) {
 .anki-status.is-new { background: var(--anki-lilac); color: #5d3b6b; }
 .anki-status.is-learning { background: #f4ead7; color: #725325; }
 
+.anki-flip-stage {
+  perspective: 1100px;
+}
+
+.anki-flip-card {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform .36s ease-in-out;
+}
+
+.anki-flip-card.is-flipped {
+  transform: rotateY(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anki-flip-card { transition: none; }
+}
+
 .anki-card-face {
   display: flex;
   flex-direction: column;
@@ -618,9 +637,19 @@ html:has(#workspace-main[data-view="anki"]) {
   border-radius: 1.1rem;
   background: var(--anki-paper);
   box-shadow: 0 4px 0 -1px #f0e8e1, 0 5px 0 -1px #e2d6d4, var(--anki-shadow);
+  backface-visibility: hidden;
 }
 
+.anki-card-face[inert] {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.anki-card-front:not([inert]) { cursor: pointer; }
+
 .anki-card-back {
+  transform: rotateY(180deg);
   border-color: #dbcae4;
   box-shadow: 0 4px 0 -1px #ede4f1, 0 5px 0 -1px #daccdf, var(--anki-shadow);
 }
@@ -667,6 +696,13 @@ html:has(#workspace-main[data-view="anki"]) {
 .anki-face-content > :last-child { margin-bottom: 0; }
 .anki-face-content :is(pre, .math-display, .katex-display, table) { max-width: 100%; overflow: auto; }
 .anki-face-content img { max-width: 100%; height: auto; }
+.anki-face-content pre { border: 1px solid var(--anki-line); }
+.anki-face-content :not(pre) > code {
+  padding: .1rem .35rem;
+  border-radius: .3rem;
+  background: var(--anki-lilac);
+  font-size: .9em;
+}
 
 .anki-back-prompt,
 .anki-citation {

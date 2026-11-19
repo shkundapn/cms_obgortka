@@ -211,11 +211,11 @@ async def paper_workspace(request: Request, response: Response):
         '<script defer src="paper-workspace.js?v=7ba731e1"></script>'
         '<script defer src="calendar-connected.js?v=69542340"></script>'
         '<link rel="stylesheet" href="/hustle/oral-defense.css">'
-        '<link rel="stylesheet" href="/hustle/anki-dashboard.css?v=286f815a">'
+        '<link rel="stylesheet" href="/hustle/anki-dashboard.css?v=8dd88c40">'
         '<script defer src="/hustle/oral-defense.js"></script>'
         '<script defer src="oral-practice.js?v=4653901e"></script>'
-        '<script defer src="/hustle/vendor/srs-engine.js"></script>'
-        '<script defer src="/hustle/anki-dashboard.js?v=ffa33240"></script>'
+        '<script defer src="/hustle/vendor/srs-engine.js?v=20261119b"></script>'
+        '<script defer src="/hustle/anki-dashboard.js?v=d643651e"></script>'
     )
     return page.replace("<!-- connected-calendar -->", calendar_assets)
 

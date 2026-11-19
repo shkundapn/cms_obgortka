@@ -20,7 +20,9 @@
   function shell() {
     return `<section class="dash-panel oral-picker" data-oral-picker><div class="oral-picker-head"><div>
       <h2>Практика за темою</h2><p>Відповідай на питання за конспектом. Після відповіді побачиш, що вдалося пояснити й що варто уточнити.</p></div>
-      <span class="mascot-sticker mascot-sticker--oral" aria-hidden="true"><img src="study-donkey.webp" alt="" width="320" height="320"></span></div>
+      <span class="mascot-sticker mascot-sticker--oral" aria-hidden="true">
+        <img src="assets/mascot/oral-practice.webp" alt="" width="288" height="454" decoding="async">
+      </span></div>
       <form><label>Предмет<select name="course" required></select></label><label>Тема<select name="topic" required disabled></select></label>
       <p data-oral-status role="status"></p><button class="primary" type="submit" disabled>Перейти до захисту ${icon('arrow')}</button></form>
       <a class="text-button" href="#courses">Мої предмети ${icon('arrow')}</a></section>`;

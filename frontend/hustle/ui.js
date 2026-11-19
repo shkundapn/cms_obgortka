@@ -17,11 +17,47 @@
     logout: '<path d="M9 4H4v16h5M12 12h9m-4-4 4 4-4 4"/>',
     calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 2v6M17 2v6M3 11h18"/>',
   };
+let refreshPromise = null;
+function refreshViaExtension(moodleOrigin) {
+ return new Promise(resolve => {
+  if (typeof window === 'undefined' || !window.postMessage) { resolve(false); return; }
+  const id = (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
+  let settled = false;
+  const finish = value => { if (settled) return; settled = true; clearTimeout(timer); window.removeEventListener('message', onMessage); resolve(Boolean(value)); };
+  const onMessage = event => {
+   if (event.source !== window || event.origin !== location.origin || event.data?.source !== 'hustle-extension' || event.data.id !== id) return;
+   finish(event.data.success && event.data.paired);
+  };
+  const timer = setTimeout(() => finish(false), 1500);
+  window.addEventListener('message', onMessage);
+  window.postMessage({ source: 'hustle-page', type: 'REFRESH_SESSION', id, moodleOrigin }, location.origin);
+ });
+}
 window.UI = {
 escape(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); },
 icon(name) { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes[name] || shapes.plan}</svg>`; },
+refreshSession(moodleOrigin) {
+ if (refreshPromise) return refreshPromise;
+ refreshPromise = (async () => {
+  try {
+   if (await refreshViaExtension(moodleOrigin)) return true;
+   const res = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'same-origin' });
+   if (!res.ok) return false;
+   const data = await res.json().catch(() => null);
+   return Boolean(data?.moodle_paired || data?.refreshed);
+  } catch { return false; }
+  finally { refreshPromise = null; }
+ })();
+ return refreshPromise;
+},
 async api(path, options = {}) {
- const response = await fetch(path, {credentials:'same-origin', ...options});
+ const { _retried, ...fetchOptions } = options;
+ let response = await fetch(path, {credentials:'same-origin', ...fetchOptions});
+ if (response.status === 401 && !_retried && !String(path).startsWith('/api/auth/')) {
+  if (await this.refreshSession()) {
+   response = await fetch(path, {credentials:'same-origin', ...fetchOptions});
+  }
+ }
  const data = await response.json().catch(() => null);
  if (!response.ok) {
   const detail = data?.detail;

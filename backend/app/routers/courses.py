@@ -14,7 +14,7 @@ from app.config import get_settings
 from urllib.parse import quote
 
 from app.core.parsing_restrictions import get_parsing_restrictions
-from app.core.exceptions import MoodleException
+from app.core.exceptions import MoodleAuthError, MoodleConnectionError, MoodleException
 from app.core.security import get_current_user_session
 from app.models.course import (
     CourseSummary,
@@ -66,9 +66,21 @@ async def get_my_courses(
     """
     try:
         raw_courses = await _get_cached_user_courses(session, refresh=refresh)
+    except MoodleAuthError as exc:
+        if exc.error_code == "upstream_blocked":
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=exc.message or "Moodle session expired.",
+        )
+    except MoodleConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=exc.message or "Could not reach Moodle.",
+        )
     except MoodleException as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Moodle error fetching courses: {exc.message}",
         )
 
@@ -99,9 +111,21 @@ async def get_course_detail(
     """
     try:
         raw_courses = await _get_cached_user_courses(session, refresh=refresh)
+    except MoodleAuthError as exc:
+        if exc.error_code == "upstream_blocked":
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=exc.message or "Moodle session expired.",
+        )
+    except MoodleConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=exc.message or "Could not reach Moodle.",
+        )
     except MoodleException as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Moodle error fetching course: {exc.message}",
         )
 

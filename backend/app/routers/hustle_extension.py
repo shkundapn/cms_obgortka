@@ -35,7 +35,7 @@ def package_manifest():
         if origin + "/*" not in manifest["host_permissions"]:
             manifest["host_permissions"].append(origin + "/*")
     bridge = next(item for item in manifest["content_scripts"] if "hustle-bridge.js" in item["js"])
-    bridge["matches"] = [origin + "/hustle/*" for origin in origins]
+    bridge["matches"] = [pattern for origin in origins for pattern in (origin + "/hustle/*", origin + "/prototype/*")]
     return manifest, origins
 
 

@@ -153,3 +153,66 @@ def test_system_inspect_endpoint():
     assert data["is_moodle"] is False
 
 
+def test_sliding_session_refresh_and_upstream_403_status(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    import jwt
+    from app.core.exceptions import MoodleAuthError
+    from app.services.moodle_client import MoodleClient
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "MOODLE_MOCK_MODE", True)
+
+    stale_payload = {
+        "sub": "demo",
+        "user_id": 4242,
+        "fullname": "Demo Student",
+        "site_url": "https://learn.ucu.edu.ua",
+        "moodle_token": "mock_token_demo",
+        "is_mock": True,
+        "auth_type": "cookie",
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+        "iat": datetime.now(timezone.utc) - timedelta(minutes=450),
+    }
+    near_expiry_jwt = jwt.encode(stale_payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+    c1 = TestClient(app)
+    c1.cookies.set(settings.COOKIE_NAME, near_expiry_jwt)
+    res = c1.get("/api/auth/status")
+    assert res.status_code == 200
+    assert res.json()["moodle_paired"] is True
+    assert settings.COOKIE_NAME in res.cookies
+    assert res.cookies[settings.COOKIE_NAME] != near_expiry_jwt
+
+    c2 = TestClient(app)
+    c2.cookies.set(settings.COOKIE_NAME, near_expiry_jwt)
+    refreshed = c2.post("/api/auth/refresh")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["moodle_paired"] is True
+    assert settings.COOKIE_NAME in refreshed.cookies
+
+    fresh_client = TestClient(app)
+    unauth_refresh = fresh_client.post("/api/auth/refresh")
+    assert unauth_refresh.status_code == 200
+    assert unauth_refresh.json()["needs_reconnect"] is True
+
+    # Upstream 403 during extension-pair returns 502 (not 401), and expired session on /api/courses returns 401 (not 500)
+    monkeypatch.setattr(settings, "MOODLE_MOCK_MODE", False)
+
+    async def blocked_cookie(self, **kwargs):
+        raise MoodleAuthError("Moodle returned HTTP 403", error_code="upstream_blocked")
+
+    monkeypatch.setattr(MoodleClient, "authenticate_with_cookie", blocked_cookie)
+    pair_res = fresh_client.post("/api/auth/extension-pair", json={"moodle_url": "https://learn.ucu.edu.ua", "cookie": "abcdef123456"})
+    assert pair_res.status_code == 502
+
+    async def expired_courses(self, **kwargs):
+        raise MoodleAuthError("Expired session", error_code="invalid_cookie")
+
+    monkeypatch.setattr(MoodleClient, "get_user_courses", expired_courses)
+    live_jwt = jwt.encode({**stale_payload, "is_mock": False, "moodle_token": "real_cookie"}, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    c3 = TestClient(app)
+    c3.cookies.set(settings.COOKIE_NAME, live_jwt)
+    courses_res = c3.get("/api/courses")
+    assert courses_res.status_code == 401
+
+

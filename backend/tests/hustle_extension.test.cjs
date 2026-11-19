@@ -50,3 +50,27 @@ test('course sync resolves current owner after pairing and opens Hustle',async()
  assert.deepEqual(h.requests.map(r=>new URL(r.url).pathname),['/api/auth/extension-pair','/api/workspace/session','/api/sync/extension']);
  assert.equal(h.opened[0].url,'http://127.0.0.1:8000/hustle/app.html#course/17');
 });
+test('bridge refreshes approved session from /prototype/ without leaking unapproved origins',async()=>{
+ const h=harness();h.hooks.cookie={value:'fresh-cookie'};
+ const denied=await h.send({type:'HUSTLE_REFRESH_SESSION',moodleOrigin:'https://learn.ucu.edu.ua'},{url:'http://127.0.0.1:8000/prototype/app.html',tab:{id:1}});
+ assert.equal(denied.paired,false);assert.equal(h.requests.length,0);
+ h.data.hustleConnections={'https://learn.ucu.edu.ua':'http://127.0.0.1:8000'};
+ const ok=await h.send({type:'HUSTLE_REFRESH_SESSION',moodleOrigin:'https://learn.ucu.edu.ua'},{url:'http://127.0.0.1:8000/prototype/app.html',tab:{id:1}});
+ assert.equal(ok.success,true);assert.equal(ok.paired,true);
+ assert.equal(h.requests[0].url,'http://127.0.0.1:8000/api/auth/extension-pair');
+ assert.equal(h.opened.length,0);
+});
+test('connect does not loop Moodle login tabs on upstream 502 and SYNC_COURSE still syncs extracted course',async()=>{
+ const h=harness();h.hooks.cookie={value:'fake-cookie'};
+ h.ctx.fetch=async(url)=>{
+  h.requests.push({url});
+  if(url.endsWith('/extension-pair'))return {ok:false,status:502,json:async()=>({detail:'Upstream 403'})};
+  if(url.endsWith('/session'))return {ok:true,status:200,json:async()=>({workspace_token:'ws',auth_mode:'moodle'})};
+  if(url.endsWith('/extension'))return {ok:true,status:200,json:async()=>({workspace_url:'/custom/courses/17',summary:{course_id:17}})};
+  return {ok:true,status:200,json:async()=>({})};
+ };
+ const conn=await h.send({type:'HUSTLE_CONNECT',moodleOrigin:'https://learn.ucu.edu.ua'},{url:'http://127.0.0.1:8000/hustle/connect.html',tab:{id:1}});
+ assert.equal(conn.success,false);assert.equal(conn.status,502);assert.equal(h.opened.length,0);
+ const sync=await h.send({type:'SYNC_COURSE',payload:{moodle_url:'https://learn.ucu.edu.ua',course_id:17,sections:[]}});
+ assert.equal(sync.success,true);
+});

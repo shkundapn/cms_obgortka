@@ -90,7 +90,13 @@ async function pairMoodleCookie(moodleOrigin, cookieValue, portalUrlOverride, fo
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        return { success: false, status: res.status, error: data.detail || `HTTP ${res.status}` };
+        if (res.status === 401) {
+          const freshStore = await chrome.storage.local.get(['pairedCookieCache']);
+          const nextCache = freshStore.pairedCookieCache || {};
+          delete nextCache[`${portalUrl}|${moodleOrigin}`];
+          await chrome.storage.local.set({ pairedCookieCache: nextCache });
+        }
+        return { success: false, status: res.status, needsLogin: res.status === 401, error: data.detail || `HTTP ${res.status}` };
       }
 
       const freshStore = await chrome.storage.local.get(['pairedCookieCache']);
@@ -143,11 +149,25 @@ if (chrome.tabs && chrome.tabs.onUpdated) {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.status !== 'complete' || !tab || !tab.url) return;
     const origin = extractMoodleOrigin(tab.url);
-    if (!origin) return;
-    const lastCheck = lastTabCheckAt.get(origin) || 0;
-    if (Date.now() - lastCheck < COOKIE_PAIR_COOLDOWN_MS) return;
-    lastTabCheckAt.set(origin, Date.now());
-    syncCookieForUrl(tab.url, null, false);
+    if (origin) {
+      const lastCheck = lastTabCheckAt.get(origin) || 0;
+      if (Date.now() - lastCheck < COOKIE_PAIR_COOLDOWN_MS) return;
+      lastTabCheckAt.set(origin, Date.now());
+      syncCookieForUrl(tab.url, null, false);
+      return;
+    }
+    const portalOrigin = sanitizePortalUrl(tab.url);
+    if (portalOrigin) {
+      const lastPortalCheck = lastTabCheckAt.get(portalOrigin) || 0;
+      if (Date.now() - lastPortalCheck < COOKIE_PAIR_COOLDOWN_MS) return;
+      lastTabCheckAt.set(portalOrigin, Date.now());
+      chrome.storage.local.get(['hustleConnections']).then((stored) => {
+        const conns = stored.hustleConnections || {};
+        Object.entries(conns).forEach(([mOrigin, pOrigin]) => {
+          if (pOrigin === portalOrigin) syncCookieForUrl(mOrigin, portalOrigin, false);
+        });
+      }).catch(() => {});
+    }
   });
 }
 
@@ -210,8 +230,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({success:false,error:'Спершу відкрий Hustle → Підключити LMS.'}); return;
         }
         const paired = await syncCookieForUrl(moodleOrigin, portalUrl, true);
-        if (!paired.success) {sendResponse({success:false,error:'Увійди в Moodle повторно та спробуй ще раз.'});return;}
-        const headers = await resolveCurrentWorkspaceHeaders(portalUrl);
+        if (!paired.success && (paired.needsLogin || paired.status === 401)) {
+          sendResponse({success:false,error:'Увійди в Moodle повторно та спробуй ще раз.'});
+          return;
+        }
+        let headers = await resolveCurrentWorkspaceHeaders(portalUrl);
 
         let uploadPayload = message.payload;
         let diffSkipped = 0;
@@ -262,12 +285,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         } catch (diffErr) {}
 
-        const res = await fetch(`${portalUrl}/api/sync/extension`, {
+        let res = await fetch(`${portalUrl}/api/sync/extension`, {
           method: 'POST',
           credentials: 'include',
           headers,
           body: JSON.stringify(uploadPayload),
         });
+        if (res.status === 401) {
+          headers = await resolveCurrentWorkspaceHeaders(portalUrl);
+          res = await fetch(`${portalUrl}/api/sync/extension`, {
+            method: 'POST',
+            credentials: 'include',
+            headers,
+            body: JSON.stringify(uploadPayload),
+          });
+        }
 
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {

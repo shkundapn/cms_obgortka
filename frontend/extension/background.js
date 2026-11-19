@@ -263,7 +263,7 @@ async function fetchCoursesViaBrowser(moodleOrigin) {
   if (!myRes.ok || isLogin) {
     return { success: false, status: 401, needsLogin: true, error: 'Увійди в Moodle повторно.' };
   }
-  const sessMatch = myHtml.match(/"sesskey":"([a-zA-Z0-9]+)"/) || myHtml.match(/sesskey=([a-zA-Z0-9]+)/);
+  const sessMatch = myHtml.match(/"sesskey"\s*:\s*"([a-zA-Z0-9]+)"/) || myHtml.match(/sesskey=([a-zA-Z0-9]+)/);
   const sesskey = sessMatch ? sessMatch[1] : '';
   if (sesskey) {
     try {
@@ -468,7 +468,7 @@ async function getMoodleContext(moodleOrigin) {
   if (!myRes.ok || isLogin || !myHtml) {
     return { ok: false, status: 401, needsLogin: true, error: 'Увійди в Moodle повторно.' };
   }
-  const sessMatch = myHtml.match(/"sesskey":"([a-zA-Z0-9]+)"/) || myHtml.match(/sesskey=([a-zA-Z0-9]+)/);
+  const sessMatch = myHtml.match(/"sesskey"\s*:\s*"([a-zA-Z0-9]+)"/) || myHtml.match(/sesskey=([a-zA-Z0-9]+)/);
   const uidMatch = myHtml.match(/\/user\/profile\.php\?id=(\d+)/)
     || myHtml.match(/"userId":\s*(\d+)/)
     || myHtml.match(/"userid":\s*(\d+)/)
@@ -514,7 +514,7 @@ async function fetchAssignmentsViaBrowser(moodleOrigin, courseId = null) {
     if (Array.isArray(data?.events)) events = data.events;
   } else {
     const recentFrom = Math.max(0, Math.floor(Date.now() / 1000) - 30 * 86400);
-    const [recentData, allData] = await Promise.all([
+    const [recentData, allData, coursesData] = await Promise.all([
       callMoodleAjax(moodleOrigin, ctx.sesskey, 'core_calendar_get_action_events_by_timesort', {
         timesortfrom: recentFrom,
         limitnum: 50,
@@ -523,9 +523,32 @@ async function fetchAssignmentsViaBrowser(moodleOrigin, courseId = null) {
         timesortfrom: 0,
         limitnum: 50,
       }),
+      callMoodleAjax(moodleOrigin, ctx.sesskey, 'core_course_get_enrolled_courses_by_timeline_classification', {
+        offset: 0,
+        limit: 0,
+        classification: 'inprogress',
+        sort: 'fullname',
+      }),
     ]);
+    const batches = [recentData?.events || [], allData?.events || []];
+    const enrolled = Array.isArray(coursesData?.courses) ? coursesData.courses.slice(0, 15) : [];
+    if (enrolled.length) {
+      let cIdx = 0;
+      const cWorkers = Array.from({ length: Math.min(4, enrolled.length) }, async () => {
+        while (cIdx < enrolled.length) {
+          const course = enrolled[cIdx++];
+          const cRes = await callMoodleAjax(moodleOrigin, ctx.sesskey, 'core_calendar_get_action_events_by_course', {
+            courseid: Number(course.id),
+            timesortfrom: 0,
+            limitnum: 50,
+          });
+          if (Array.isArray(cRes?.events)) batches.push(cRes.events);
+        }
+      });
+      await Promise.all(cWorkers);
+    }
     const seen = new Set();
-    for (const batch of [recentData?.events || [], allData?.events || []]) {
+    for (const batch of batches) {
       for (const ev of batch) {
         const cid = Number(ev.course?.id || 0);
         const key = `${cid}:${ev.id || ev.instance || ev.name}`;

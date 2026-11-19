@@ -38,10 +38,22 @@ async def get_my_grades(
                 sesskey=sesskey,
             )
             cache.set(site_url, user_id, "courses", courses, ttl_seconds=300.0)
+        except MoodleAuthError as exc:
+            if exc.error_code == "upstream_blocked":
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=exc.message,
+                )
+            if course_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=exc.message,
+                )
+            courses = []
         except MoodleException as exc:
             if course_id is None:
                 raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Moodle error fetching user courses for grades: {exc.message}",
                 )
             courses = []
@@ -54,6 +66,7 @@ async def get_my_grades(
         target_courses = courses
 
     sem = asyncio.Semaphore(5)
+    blocked_errors: List[str] = []
 
     async def _fetch_course_grade(course: Dict[str, Any]) -> CourseGrades:
         cid = int(course["id"])
@@ -96,6 +109,14 @@ async def get_my_grades(
                 cache.set(site_url, user_id, "grades", cg, key=str(cid), ttl_seconds=300.0)
                 return cg
             except MoodleAuthError as exc:
+                if exc.error_code == "upstream_blocked":
+                    blocked_errors.append(exc.message)
+                    if course_id is not None:
+                        raise HTTPException(
+                            status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=exc.message,
+                        )
+                    return CourseGrades(course_id=cid, course_fullname=cname, grade_items=[])
                 if course_id is not None:
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -103,6 +124,7 @@ async def get_my_grades(
                     )
                 return CourseGrades(course_id=cid, course_fullname=cname, grade_items=[])
             except MoodleException as exc:
+                blocked_errors.append(exc.message)
                 if course_id is not None:
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -113,6 +135,11 @@ async def get_my_grades(
                 return CourseGrades(course_id=cid, course_fullname=cname, grade_items=[])
 
     course_grades_list = list(await asyncio.gather(*(_fetch_course_grade(c) for c in target_courses)))
+    if blocked_errors and target_courses and all(not cg.grade_items for cg in course_grades_list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=blocked_errors[0],
+        )
     return GradeOverviewResponse(courses=course_grades_list)
 
 

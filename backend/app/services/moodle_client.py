@@ -1984,6 +1984,7 @@ class MoodleClient:
 
             courses_dict: Dict[int, Dict[str, Any]] = {}
             events: List[Dict[str, Any]] = []
+            first_error: Optional[Exception] = None
 
             if sesskey:
                 if len(target_ids) == 1:
@@ -1997,6 +1998,10 @@ class MoodleClient:
                         )
                         if isinstance(res_course, dict) and isinstance(res_course.get("events"), list):
                             events = res_course["events"]
+                    except (MoodleAuthError, MoodleException) as exc:
+                        if first_error is None:
+                            first_error = exc
+                        logger.debug(f"AJAX core_calendar_get_action_events_by_course failed for {only_cid}: {exc}")
                     except Exception as exc:
                         logger.debug(f"AJAX core_calendar_get_action_events_by_course failed for {only_cid}: {exc}")
 
@@ -2004,6 +2009,7 @@ class MoodleClient:
                     recent_from = max(0, int(time.time()) - 30 * 86400)
 
                     async def _fetch_timesort(ts_from: int) -> List[Dict[str, Any]]:
+                        nonlocal first_error
                         try:
                             res = await self.call_ajax_ws(
                                 "core_calendar_get_action_events_by_timesort",
@@ -2012,11 +2018,17 @@ class MoodleClient:
                                 args={"timesortfrom": ts_from, "limitnum": 50},
                             )
                             return res.get("events", []) if isinstance(res, dict) else []
+                        except (MoodleAuthError, MoodleException) as exc:
+                            if first_error is None:
+                                first_error = exc
+                            logger.warning(f"Error fetching assignments via AJAX (timesortfrom={ts_from}): {exc}")
+                            return []
                         except Exception as exc:
                             logger.warning(f"Error fetching assignments via AJAX (timesortfrom={ts_from}): {exc}")
                             return []
 
                     async def _fetch_by_course(cid: int, sem: asyncio.Semaphore) -> List[Dict[str, Any]]:
+                        nonlocal first_error
                         async with sem:
                             try:
                                 rc = await self.call_ajax_ws(
@@ -2026,6 +2038,10 @@ class MoodleClient:
                                     args={"courseid": cid, "timesortfrom": 0, "limitnum": 50},
                                 )
                                 return rc.get("events", []) if isinstance(rc, dict) else []
+                            except (MoodleAuthError, MoodleException) as exc:
+                                if first_error is None:
+                                    first_error = exc
+                                return []
                             except Exception:
                                 return []
 
@@ -2047,6 +2063,9 @@ class MoodleClient:
                                 continue
                             seen_ev_keys.add(ev_key)
                             events.append(ev)
+
+            if not events and first_error is not None:
+                raise first_error
 
             for ev in events:
                 c_info = ev.get("course", {})

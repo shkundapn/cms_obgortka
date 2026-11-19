@@ -311,4 +311,17 @@ def test_browser_relayed_pairing_and_course_html_sync_when_server_blocked(monkey
     assert upd_res.json()["checked"] is True
     assert not upd_res.json().get("upstream_blocked")
 
+    async def blocked_ajax(*args, **kwargs):
+        raise MoodleAuthError("Moodle returned HTTP 403", error_code="upstream_blocked")
+
+    async def blocked_courses(*args, **kwargs):
+        raise MoodleAuthError("Moodle returned HTTP 403", error_code="upstream_blocked")
+
+    monkeypatch.setattr(MoodleClient, "call_ajax_ws", blocked_ajax)
+    monkeypatch.setattr(MoodleClient, "get_user_courses", blocked_courses)
+    monkeypatch.setattr(MoodleClient, "get_user_grades", blocked_courses)
+
+    assert c.get("/api/assignments?refresh=true").status_code == 502
+    assert c.get("/api/grades?refresh=true").status_code == 502
+
 

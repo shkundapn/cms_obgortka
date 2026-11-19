@@ -70,7 +70,7 @@ async fallbackViaExtension(path) {
  if (raw.startsWith('/api/grades') && !raw.startsWith('/api/grades/from-browser')) {
   const q = raw.includes('?') ? new URLSearchParams(raw.split('?')[1]) : null;
   const courseId = q?.get('course_id') ? Number(q.get('course_id')) : null;
-  const res = await extensionCall('MOODLE_GRADES', { courseId }, 20000);
+  const res = await extensionCall('MOODLE_GRADES', { courseId }, 30000);
   if (res?.success) return { courses: res.courses || [] };
  }
  const checkMatch = raw.match(/^\/api\/workspace\/courses\/(\d+)\/check-updates/);

@@ -200,7 +200,7 @@ async def paper_workspace(request: Request, response: Response):
     calendar_assets = (
         '<link rel="stylesheet" href="/hustle/calendar.css?v=34204267">'
         '<link rel="stylesheet" href="calendar-connected.css?v=c478c5e2">'
-        '<script defer src="/hustle/ui.js?v=f6be80d4"></script>'
+        '<script defer src="/hustle/ui.js?v=9345942e"></script>'
         '<link rel="stylesheet" href="/prototype/topic-flashcards.css?v=be5715b0">'
         '<script defer src="/prototype/topic-flashcards.js?v=b122226a"></script>'
         '<script defer src="/hustle/calendar.js?v=80b44a60"></script>'

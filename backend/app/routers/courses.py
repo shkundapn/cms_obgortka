@@ -436,7 +436,9 @@ async def transcribe_video(req: VideoTranscriptionRequest, request: Request):
                 "video_id": digest.get("video_id"),
                 "language": digest.get("language") or "uk",
                 "full_text": digest["text"],
-                "segments": [],
+                "segments": digest.get("segments", []),
+                "concepts": digest.get("concepts", []),
+                "video_summary": digest.get("video_summary", ""),
                 "source": digest.get("source"),
                 "token_cost": digest.get("token_cost", 1),
             }

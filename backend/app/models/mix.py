@@ -98,18 +98,16 @@ class RawTopicSnapshot(BaseModel):
         return self
 
 
-class InteractiveBookSection(BaseModel):
-    """Structured interactive textbook unit with optional Mermaid diagram and visual card."""
+class VideoConceptAnchor(BaseModel):
+    """A single concept segment from a YouTube lecture video with exact timestamp jump link."""
 
-    chunk_id: Optional[str] = None
-    source_hash: Optional[str] = None
-    heading: str
-    explanation_markdown: str
-    key_takeaways: List[str] = Field(default_factory=list)
-    mermaid_diagram: Optional[str] = None
-    visual_card_caption: Optional[str] = None
-    visual_card_prompt: Optional[str] = None
-    visual_card_url: Optional[str] = None
+    id: str
+    concept_title: str
+    timecode: str = "00:00"
+    start_seconds: int = 0
+    end_seconds: Optional[int] = None
+    youtube_url: str
+    summary: str = ""
 
 
 class PracticeQuestion(BaseModel):
@@ -126,6 +124,26 @@ class PracticeQuestion(BaseModel):
         if self.correct_index >= len(self.options):
             raise ValueError("correct_index must be within options range.")
         return self
+
+
+class InteractiveBookSection(BaseModel):
+    """Structured interactive textbook module with video concepts, self-tests, and AI tutor check."""
+
+    module_id: Optional[str] = None
+    chunk_id: Optional[str] = None
+    source_hash: Optional[str] = None
+    heading: str
+    short_description: Optional[str] = None
+    explanation_markdown: str
+    key_takeaways: List[str] = Field(default_factory=list)
+    video_concepts: List[VideoConceptAnchor] = Field(default_factory=list)
+    module_quizzes: List[PracticeQuestion] = Field(default_factory=list)
+    tutor_question: Optional[str] = None
+    tutor_expected_answer: Optional[str] = None
+    mermaid_diagram: Optional[str] = None
+    visual_card_caption: Optional[str] = None
+    visual_card_prompt: Optional[str] = None
+    visual_card_url: Optional[str] = None
 
 
 class Flashcard(BaseModel):
@@ -164,6 +182,7 @@ class TopicMix(BaseModel):
     authority: str = "ucu"
     topic_index: int = 0
     title: str
+    topic_summary: Optional[str] = None
     source_hash: str
     version: int = 1
     visibility: VisibilityScope = "private"
@@ -187,6 +206,7 @@ class TopicDigest(BaseModel):
     mix_id: str
     topic_index: int = 0
     title: str
+    topic_summary: Optional[str] = None
     source_hash: str
     summary_bullets: List[str] = Field(default_factory=list)
     mermaid_node: Optional[str] = None

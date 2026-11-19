@@ -22,6 +22,7 @@ from app.models.mix import (
     TopicDigest,
     TopicMix,
     TopicPreviewItem,
+    VideoConceptAnchor,
     CourseStructurePreview,
     compute_content_hash,
 )
@@ -223,6 +224,7 @@ class BaseMixGenerator(ABC):
         source_hash: Optional[str] = None,
         course_title: str = "",
         topic_title: str = "",
+        video_concepts: Optional[List[Dict[str, Any]]] = None,
     ) -> InteractiveBookSection:
         """Build a single InteractiveBookSection atomically."""
 
@@ -341,6 +343,7 @@ class StructuredPlaceholderMixGenerator(BaseMixGenerator):
         source_hash: Optional[str] = None,
         course_title: str = "",
         topic_title: str = "",
+        video_concepts: Optional[List[Dict[str, Any]]] = None,
     ) -> InteractiveBookSection:
         key_points, _ = _extract_key_points(content_text, title, limit=6)
         mermaid_code = await self.generate_mermaid_diagram(title, key_points, course_title=course_title) if include_mermaid else None
@@ -354,12 +357,28 @@ class StructuredPlaceholderMixGenerator(BaseMixGenerator):
             f"(`{source_id}`) without modifying or storing restricted exam items.\n\n"
             f"{summary_body}"
         )
+        vc_models = [
+            VideoConceptAnchor(
+                id=str(vc.get("id") or f"vc-{uuid.uuid4().hex[:8]}"),
+                concept_title=str(vc["concept_title"]),
+                timecode=str(vc.get("timecode") or "00:00"),
+                start_seconds=int(vc.get("start_seconds") or 0),
+                end_seconds=int(vc["end_seconds"]) if vc.get("end_seconds") is not None else None,
+                youtube_url=str(vc["youtube_url"]),
+                summary=str(vc.get("summary") or ""),
+            )
+            for vc in (video_concepts or [])
+            if isinstance(vc, dict) and vc.get("youtube_url") and vc.get("concept_title")
+        ]
+        mod_hash = source_hash or compute_content_hash(content_text or title)
         return InteractiveBookSection(
+            module_id=chunk_id or f"mod-{mod_hash[:10]}",
             chunk_id=chunk_id,
-            source_hash=source_hash or compute_content_hash(content_text or title),
+            source_hash=mod_hash,
             heading=title,
             explanation_markdown=explanation,
             key_takeaways=key_points[:4],
+            video_concepts=vc_models,
             mermaid_diagram=mermaid_code,
             visual_card_caption=card_caption,
             visual_card_prompt=card_prompt,
@@ -646,6 +665,7 @@ class GeminiMixGenerator(StructuredPlaceholderMixGenerator):
         source_hash: Optional[str] = None,
         course_title: str = "",
         topic_title: str = "",
+        video_concepts: Optional[List[Dict[str, Any]]] = None,
     ) -> InteractiveBookSection:
         cleaned_source = clean_source_for_ai(content_text) or content_text
         key_points, _ = _extract_key_points(cleaned_source, title, limit=6)
@@ -656,6 +676,10 @@ class GeminiMixGenerator(StructuredPlaceholderMixGenerator):
 
         explanation = None
         key_takeaways = key_points[:4]
+        short_desc = None
+        module_quizzes: List[PracticeQuestion] = []
+        tutor_q = None
+        tutor_ans = None
 
         if self.gemini.is_available:
             ai_data = await self.gemini.generate_book_section_content(
@@ -664,11 +688,31 @@ class GeminiMixGenerator(StructuredPlaceholderMixGenerator):
                 key_points,
                 course_title=course_title,
                 topic_title=topic_title,
+                video_concepts=video_concepts,
             )
-            if ai_data and ai_data.get("explanation_markdown"):
+            if isinstance(ai_data, dict) and ai_data.get("explanation_markdown"):
                 explanation = ai_data["explanation_markdown"]
                 if ai_data.get("key_takeaways"):
                     key_takeaways = ai_data["key_takeaways"]
+                if ai_data.get("short_description"):
+                    short_desc = str(ai_data["short_description"]).strip()
+                if ai_data.get("tutor_question"):
+                    tutor_q = str(ai_data["tutor_question"]).strip()
+                if ai_data.get("tutor_expected_answer"):
+                    tutor_ans = str(ai_data["tutor_expected_answer"]).strip()
+                for q in ai_data.get("module_quizzes") or []:
+                    if isinstance(q, dict) and q.get("question") and isinstance(q.get("options"), list) and len(q["options"]) >= 2:
+                        c_idx = int(q.get("correct_index") or 0)
+                        if 0 <= c_idx < len(q["options"]):
+                            module_quizzes.append(
+                                PracticeQuestion(
+                                    question=str(q["question"]).strip(),
+                                    options=[str(o).strip() for o in q["options"]],
+                                    correct_index=c_idx,
+                                    explanation=str(q.get("explanation") or f"Пояснення до модуля '{title}'.").strip(),
+                                    topic_ref=title,
+                                )
+                            )
 
         if not explanation:
             self.require_generated_content()
@@ -679,12 +723,36 @@ class GeminiMixGenerator(StructuredPlaceholderMixGenerator):
                 f"{summary_body}"
             )
 
+        vc_models: List[VideoConceptAnchor] = []
+        for vc in video_concepts or []:
+            if isinstance(vc, dict) and vc.get("youtube_url") and vc.get("concept_title"):
+                vc_models.append(
+                    VideoConceptAnchor(
+                        id=str(vc.get("id") or f"vc-{uuid.uuid4().hex[:8]}"),
+                        concept_title=str(vc["concept_title"]),
+                        timecode=str(vc.get("timecode") or "00:00"),
+                        start_seconds=int(vc.get("start_seconds") or 0),
+                        end_seconds=int(vc["end_seconds"]) if vc.get("end_seconds") is not None else None,
+                        youtube_url=str(vc["youtube_url"]),
+                        summary=str(vc.get("summary") or ""),
+                    )
+                )
+
+        mod_hash = source_hash or compute_content_hash(content_text or title)
+        mod_id = chunk_id or f"mod-{mod_hash[:10]}"
+
         return InteractiveBookSection(
+            module_id=mod_id,
             chunk_id=chunk_id,
-            source_hash=source_hash or compute_content_hash(content_text or title),
+            source_hash=mod_hash,
             heading=title,
+            short_description=short_desc,
             explanation_markdown=explanation,
             key_takeaways=key_takeaways,
+            video_concepts=vc_models,
+            module_quizzes=module_quizzes,
+            tutor_question=tutor_q,
+            tutor_expected_answer=tutor_ans,
             mermaid_diagram=mermaid_code,
             visual_card_caption=card_caption,
             visual_card_prompt=card_prompt,

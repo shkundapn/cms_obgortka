@@ -124,6 +124,7 @@
       window.HustleCalendar?.mount(main,account,courses);
       window.HustleFrame?.mount(main,account,courses,currentBundle);
       window.HustleDeadlineVisuals?.mount(main);
+      window.HustleModules?.hydrate?.(main,currentBundle);
       if(navigate) {main.focus({preventScroll:true});window.scrollTo(0,scrolls.get(location.hash)||0);}
       if(route.view==='connect')await showConnect();
     } catch(err) {if(turn===generation){main.innerHTML=errorMarkup(err.message);main.removeAttribute('aria-busy');main.inert=false;}}
@@ -188,5 +189,18 @@
   document.querySelector('#workspace-update').onclick=()=>{refreshAvailable=false;refreshNotice();render();};
   window.addEventListener('hashchange',()=>{scrolls.set(lastHash,window.scrollY);lastHash=location.hash;menuState(false);render({navigate:true});});
   window.addEventListener('hustle:refresh',()=>render());
+  window.addEventListener('hustle:rerender-module',()=>{
+    const route=UI.route();
+    if(!currentBundle||!route.courseId||String(currentBundle.course.course_id)!==String(route.courseId))return;
+    const savedY=window.scrollY;
+    const draftAnswer=main.querySelector('[data-tm-tutor-form] textarea')?.value||'';
+    if(window.HustleSpace)main.innerHTML=HustleSpace.courseHeader(currentBundle,courses,`<button class="secondary" data-add>Додати матеріали +</button><a class="icon-button course-options" href="${UI.courseLink(route.courseId,'manage')}" aria-label="Параметри курсу" title="Параметри курсу">${icon('settings')}</a>`)+HustleLearning.renderBundle(currentBundle,route.section);
+    else main.innerHTML=HustleLearning.renderBundle(currentBundle,route.section);
+    if(draftAnswer){const ta=main.querySelector('[data-tm-tutor-form] textarea');if(ta)ta.value=draftAnswer;}
+    HustleCourse.mount(currentBundle,route.section,account);
+    UI.enhance(main);
+    HustleLearning.afterRender();
+    window.scrollTo(0,savedY);
+  });
   lastHash=location.hash;render();
 })();

@@ -293,8 +293,9 @@ Course Data:
         keywords: Optional[List[str]] = None,
         course_title: str = "",
         topic_title: str = "",
+        video_concepts: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Synthesize interactive textbook markdown and takeaways with Gemini."""
+        """Synthesize deep, structured textbook module markdown, video references, quizzes, and tutor prompt with Gemini."""
         if not self.is_available:
             return None
 
@@ -305,44 +306,69 @@ Course Data:
         if topic_title and topic_title.strip() != title.strip():
             context_lines.append(f'Topic: "{topic_title}"')
         context_block = ("\n".join(context_lines) + "\n") if context_lines else ""
-        prompt = f"""
-You are an expert university professor explaining this course material:
-{context_block}Section title: "{title}"
-Ingested source material:
-{content_text[:6000]}
 
+        vc_block = ""
+        if video_concepts:
+            vc_lines = [
+                f"- [{vc.get('timecode', '00:00')}] {vc.get('concept_title', '')} ({vc.get('youtube_url', '')}): {vc.get('summary', '')}"
+                for vc in video_concepts[:8]
+            ]
+            vc_block = "\nVideo lecture concepts with timestamps:\n" + "\n".join(vc_lines) + "\n"
+
+        prompt = f"""
+You are an expert university professor writing a comprehensive, exhaustive textbook module in Ukrainian:
+{context_block}Module title: "{title}"
+Ingested source material:
+{content_text[:16000]}
+{vc_block}
 Keywords: {kw_str}
 
 Grounding rules:
 - Stay strictly within the academic domain of the Course and Topic above.
-- Never drift into unrelated disciplines (e.g. generic study methods like SQ3R or unrelated ML topics) unless explicitly present in the source text.
-- Never treat Moodle activity names (Reading, Seminar, Quiz, Bonus activities) as course concepts to meta-explain.
-- If the ingested source text is sparse or only a title/outline, explain the actual domain theory, definitions, and intuition corresponding to the Course + Topic + Section title.
+- Never drift into unrelated disciplines or treat Moodle activity names as course concepts to meta-explain.
+- Use ALL relevant material from the source text and video transcript — do not summarize superficially; provide a deep, richly explained textbook module.
+- Use valid LaTeX ($...$ inline and $$...$$ display) for mathematical notation, formulas, and derivations.
+- If video concepts with timestamps are listed above, explicitly weave into the prose where we analyze each concept and invite the student to watch the exact YouTube timestamp link.
 
-Please generate an engaging, in-depth interactive study section in Markdown (Ukrainian language) covering:
-1. Core theoretical foundations with clear intuition and examples
-2. Real-world applications and key algorithms / principles
-3. Common pitfalls and edge cases to watch out for
-4. Key takeaways summary (4-6 bullets)
+Please generate a comprehensive textbook module in Ukrainian covering:
+1. "short_description": 1-2 sentence overview of what this module covers.
+2. "explanation_markdown": Very thorough, in-depth Markdown chapter (800-1800 words when source allows) with clear subsections: formal definitions, intuition, mathematical/conceptual derivations, worked step-by-step examples, edge cases & pitfalls, and practical applications.
+3. "key_takeaways": 4-6 crisp takeaways.
+4. "module_quizzes": 2-3 conceptual self-check items (4 options each, correct_index 0..3, explanation) testing this specific module.
+5. "tutor_question": 1 probing conceptual open question for the AI Tutor check of this module (student must score >= 4/10).
+6. "tutor_expected_answer": Exemplary, complete 10/10 model answer to tutor_question grounded in this module.
 
 Return ONLY a JSON object:
 {{
-  "explanation_markdown": "# {title}\\n\\n...",
-  "key_takeaways": ["Point 1", "Point 2", "Point 3", "Point 4"]
+  "short_description": "...",
+  "explanation_markdown": "## {title}\\n\\n...",
+  "key_takeaways": ["Point 1", "Point 2", "Point 3", "Point 4"],
+  "module_quizzes": [
+    {{
+      "question": "...",
+      "options": ["A", "B", "C", "D"],
+      "correct_index": 0,
+      "explanation": "..."
+    }}
+  ],
+  "tutor_question": "...",
+  "tutor_expected_answer": "..."
 }}
 """
         res = await self.generate_content(
             prompt,
-            system_instruction="You write high-quality academic textbook materials in Ukrainian strictly grounded in the course subject. Return JSON only.",
+            system_instruction="You write comprehensive, deep university textbook modules in Ukrainian strictly grounded in the course subject and video transcripts. Return JSON only.",
             json_mode=True,
-            temperature=0.3,
+            temperature=0.25,
+            timeout=50.0,
         )
         if not res:
             return None
 
         try:
             clean_json = re.sub(r"^```(?:json)?\s*|\s*```$", "", res.strip(), flags=re.MULTILINE)
-            return json.loads(clean_json)
+            parsed = json.loads(clean_json)
+            return parsed if isinstance(parsed, dict) else None
         except Exception:
             return None
 
@@ -543,3 +569,330 @@ Rules:
         except Exception as exc:
             logger.warning("Unexpected YouTube Gemini extraction error (%s)", type(exc).__name__)
             return None
+
+    async def structure_youtube_concepts(
+        self,
+        youtube_url: str,
+        video_id: str,
+        timestamped_transcript: str,
+        title: str = "",
+        course_title: str = "",
+        raise_on_error: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Analyze full timestamped YouTube subtitles into chronological concept blocks with exact start/end timecodes."""
+        if not self.is_available or not timestamped_transcript.strip():
+            return None
+
+        ctx = []
+        if course_title:
+            ctx.append(f'Курс: "{course_title}"')
+        if title:
+            ctx.append(f'Тема/матеріал: "{title}"')
+        ctx_line = ("\n".join(ctx) + "\n") if ctx else ""
+
+        prompt = f"""{ctx_line}Нижче наведено повні субтитри відеолекції ({youtube_url}) з точними таймкодами [MM:SS] або [HH:MM:SS].
+Проаналізуй УВЕСЬ зміст відео без втрати матеріалу та розбий його на логічні хронологічні підпункти (концепти), у кожному з яких пояснюється один окремий концепт, означення, теорема чи приклад з відео.
+
+СУБТИТРИ ВІДЕО:
+{timestamped_transcript[:42000]}
+
+Поверни строго JSON-об'єкт такого формату:
+{{
+  "video_summary": "Короткий підсумок усього відео (2-3 речення українською).",
+  "concepts": [
+    {{
+      "concept_title": "Чітка назва концепту (українською)",
+      "start_seconds": 120,
+      "end_seconds": 360,
+      "timecode": "02:00",
+      "summary": "Стисла суть концепту з відео (2 речення).",
+      "explanation_markdown": "Детальне академічне пояснення цього концепту на основі слів лектора: означення, формули у LaTeX ($...$ / $$...$$), інтуїція та приклади з відео."
+    }}
+  ]
+}}
+"""
+        try:
+            res = await self.generate_content(
+                prompt,
+                system_instruction="You analyze full timestamped lecture transcripts and split them into well-explained chronological concept segments in Ukrainian. Output valid JSON only.",
+                json_mode=True,
+                temperature=0.2,
+                timeout=60.0,
+                raise_on_error=raise_on_error,
+            )
+            if not res:
+                return None
+            clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", res.strip(), flags=re.MULTILINE)
+            try:
+                data = json.loads(clean)
+            except Exception:
+                # Graceful plain-text fallback (e.g. non-JSON video notes or test mocks)
+                plain = res.strip()
+                return {
+                    "video_summary": plain[:300],
+                    "full_notes": plain,
+                    "concepts": [],
+                }
+            if not isinstance(data, dict):
+                return None
+            concepts = []
+            for idx, c in enumerate(data.get("concepts") or []):
+                if not isinstance(c, dict) or not c.get("concept_title"):
+                    continue
+                start_s = max(0, int(float(c.get("start_seconds") or 0)))
+                end_s_raw = c.get("end_seconds")
+                end_s = int(float(end_s_raw)) if end_s_raw is not None else None
+                m, s = divmod(start_s, 60)
+                h, m = divmod(m, 60)
+                tc = str(c.get("timecode") or (f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}")).strip()
+                concepts.append({
+                    "id": f"yt-{video_id}-{start_s}-{idx}",
+                    "concept_title": str(c["concept_title"]).strip(),
+                    "start_seconds": start_s,
+                    "end_seconds": end_s,
+                    "timecode": tc,
+                    "youtube_url": f"https://www.youtube.com/watch?v={video_id}&t={start_s}s",
+                    "summary": str(c.get("summary") or "").strip(),
+                    "explanation_markdown": str(c.get("explanation_markdown") or "").strip(),
+                })
+            return {
+                "video_summary": str(data.get("video_summary") or "").strip(),
+                "concepts": concepts,
+            }
+        except LearningProviderError:
+            if raise_on_error:
+                raise
+            return None
+        except Exception as exc:
+            logger.warning("Failed to structure YouTube concepts (%s)", type(exc).__name__)
+            return None
+
+    async def summarize_youtube_video_structured(
+        self,
+        youtube_url: str,
+        video_id: str,
+        title: str = "",
+        course_title: str = "",
+        raise_on_error: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """When captions are unavailable, use Gemini native video understanding to extract full notes + timestamped concepts."""
+        if not self.is_available:
+            return None
+        from app.services.video_transcriber import VideoTranscriberService
+        norm = VideoTranscriberService.normalize_youtube_url(youtube_url)
+        if not norm:
+            return None
+
+        ctx = []
+        if course_title:
+            ctx.append(f'Курс: "{course_title}"')
+        if title:
+            ctx.append(f'Тема: "{title}"')
+        ctx_line = ("\n".join(ctx) + "\n") if ctx else ""
+
+        prompt = (
+            f"{ctx_line}"
+            "Уважно переглянь та прослухай це навчальне відео повністю. Розбий його на хронологічні концепти з точними таймкодами "
+            "та напиши детальний структурований конспект українською мовою без втрати матеріалу.\n\n"
+            "Поверни строго JSON:\n"
+            "{\n"
+            '  "video_summary": "Короткий огляд відео (2-3 речення)",\n'
+            '  "full_notes": "Повний детальний конспект усіх пояснень, формул (LaTeX), теорем і прикладів з відео",\n'
+            '  "concepts": [\n'
+            "    {\n"
+            '      "concept_title": "Назва концепту",\n'
+            '      "start_seconds": 0,\n'
+            '      "end_seconds": 180,\n'
+            '      "timecode": "00:00",\n'
+            '      "summary": "Суть концепту",\n'
+            '      "explanation_markdown": "Детальне пояснення цього концепту з відео"\n'
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+        try:
+            res = await self.generate_content(
+                prompt,
+                system_instruction="You watch educational videos and output complete timestamped concept structures and lecture notes in Ukrainian JSON.",
+                json_mode=True,
+                temperature=0.2,
+                timeout=120.0,
+                extra_parts=[{"fileData": {"fileUri": norm, "mimeType": "video/mp4"}}],
+                raise_on_error=raise_on_error,
+            )
+            if not res:
+                return None
+            clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", res.strip(), flags=re.MULTILINE)
+            try:
+                data = json.loads(clean)
+            except Exception:
+                # Graceful plain-text fallback (e.g. non-JSON video notes or test mocks)
+                plain = res.strip()
+                return {
+                    "video_summary": plain[:300],
+                    "full_notes": plain,
+                    "concepts": [],
+                }
+            if not isinstance(data, dict):
+                return None
+            concepts = []
+            for idx, c in enumerate(data.get("concepts") or []):
+                if not isinstance(c, dict) or not c.get("concept_title"):
+                    continue
+                start_s = max(0, int(float(c.get("start_seconds") or 0)))
+                end_s_raw = c.get("end_seconds")
+                end_s = int(float(end_s_raw)) if end_s_raw is not None else None
+                m, s = divmod(start_s, 60)
+                h, m = divmod(m, 60)
+                tc = str(c.get("timecode") or (f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}")).strip()
+                concepts.append({
+                    "id": f"yt-{video_id}-{start_s}-{idx}",
+                    "concept_title": str(c["concept_title"]).strip(),
+                    "start_seconds": start_s,
+                    "end_seconds": end_s,
+                    "timecode": tc,
+                    "youtube_url": f"https://www.youtube.com/watch?v={video_id}&t={start_s}s",
+                    "summary": str(c.get("summary") or "").strip(),
+                    "explanation_markdown": str(c.get("explanation_markdown") or "").strip(),
+                })
+            return {
+                "video_summary": str(data.get("video_summary") or "").strip(),
+                "full_notes": str(data.get("full_notes") or "").strip(),
+                "concepts": concepts,
+            }
+        except LearningProviderError:
+            if raise_on_error:
+                raise
+            return None
+        except Exception as exc:
+            logger.warning("Structured YouTube Gemini extraction failed (%s)", type(exc).__name__)
+            return None
+
+    async def generate_topic_summary(
+        self,
+        topic_title: str,
+        context_text: str,
+        course_title: str = "",
+    ) -> Optional[str]:
+        """Generate a concise 2-4 sentence summary of the topic in Ukrainian."""
+        if not self.is_available or not context_text.strip():
+            return None
+        prompt = (
+            f'Курс: "{course_title}"\nТема: "{topic_title}"\n\n'
+            f"Матеріали теми:\n{context_text[:10000]}\n\n"
+            "Напиши коротке, змістовне самері (2–4 речення українською), яке пояснює суть цієї теми та ключові поняття. "
+            'Поверни JSON: {"topic_summary": "..."}'
+        )
+        try:
+            res = await self.generate_content(
+                prompt,
+                system_instruction="You summarize university course topics concisely in Ukrainian. Return JSON only.",
+                json_mode=True,
+                temperature=0.2,
+                timeout=30.0,
+            )
+            if not res:
+                return None
+            clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", res.strip(), flags=re.MULTILINE)
+            parsed = json.loads(clean)
+            if isinstance(parsed, dict) and parsed.get("topic_summary"):
+                return str(parsed["topic_summary"]).strip()
+        except Exception:
+            return None
+        return None
+
+    async def evaluate_module_tutor_answer(
+        self,
+        module_title: str,
+        module_content: str,
+        tutor_question: str,
+        expected_10_answer: str,
+        student_answer: str = "",
+        audio_bytes: Optional[bytes] = None,
+        audio_mime: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Grade a student's module comprehension answer from 0 to 10 (pass >= 4/10) and provide the 10/10 model answer."""
+        if not self.is_available:
+            return None
+        import base64
+
+        has_audio = bool(audio_bytes and len(audio_bytes) >= 250)
+        parts: List[Dict[str, Any]] = []
+        if has_audio and audio_bytes is not None:
+            clean_mime = (audio_mime or "audio/webm").split(";")[0].strip().lower()
+            if clean_mime == "audio/x-m4a":
+                clean_mime = "audio/mp4"
+            parts.append({"inlineData": {"mimeType": clean_mime, "data": base64.b64encode(audio_bytes).decode("ascii")}})
+
+        ans_block = (
+            f'Відповідь студента (текст / транскрипт): "{student_answer.strip()}"'
+            if student_answer.strip()
+            else "Прослухай аудіовідповідь студента вище та розшифруй її."
+        )
+
+        prompt = f"""Оціни відповідь студента на запитання AI-тютора за модулем підручника «{module_title}».
+
+ПИТАННЯ AI-ТЮТОРА:
+{tutor_question}
+
+ЕТАЛОННИЙ ОРІЄНТИР (для 10/10):
+{expected_10_answer}
+
+МАТЕРІАЛ МОДУЛЯ:
+{module_content[:8000]}
+
+{ans_block}
+
+ПРАВИЛА ОЦІНЮВАННЯ:
+1. Постав чесну цілочисельну оцінку від 0 до 10 (`score`). Мінімальний прохідний бал — 4/10 (`passed: score >= 4`).
+2. Якщо студент відповів неправильно, поверхнево або набрав < 10/10 — чітко вкажи кожну помилку чи прогалину і обов'язково сформулюй повну, ідеальну очікувану відповідь для 10/10 (`expected_10_of_10`).
+3. Поверни строго JSON:
+{{
+  "score": 7,
+  "passed": true,
+  "user_transcript": "Що сказав/написав студент",
+  "feedback": "Детальний розбір відповіді українською: що правильно, а що потрібно виправити.",
+  "mistakes": [
+    {{
+      "mistake": "Конкретна помилка або неточність студента",
+      "correction": "Як правильно за матеріалом модуля"
+    }}
+  ],
+  "expected_10_of_10": "Чітка зразкова відповідь на 10/10 за цим модулем."
+}}
+"""
+        parts.append({"text": prompt})
+        res = await self.generate_content(
+            prompt="",
+            extra_parts=parts,
+            system_instruction="You are an encouraging yet rigorous AI university tutor grading student comprehension on a 0-10 scale in Ukrainian. Return JSON only.",
+            json_mode=True,
+            temperature=0.2,
+            timeout=45.0,
+            raise_on_error=True,
+        )
+        if not res:
+            return None
+        clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", res.strip(), flags=re.MULTILINE)
+        data = json.loads(clean)
+        if not isinstance(data, dict):
+            return None
+        score = max(0, min(10, int(data.get("score") if data.get("score") is not None else 0)))
+        mistakes_out = []
+        for item in data.get("mistakes") or []:
+            if isinstance(item, dict):
+                m_txt = str(item.get("mistake") or item.get("said") or "").strip()
+                c_txt = str(item.get("correction") or "").strip()
+                if m_txt or c_txt:
+                    mistakes_out.append({"mistake": m_txt, "correction": c_txt})
+            elif str(item).strip():
+                mistakes_out.append({"mistake": str(item).strip(), "correction": ""})
+
+        return {
+            "score": score,
+            "passed": score >= 4,
+            "user_transcript": str(data.get("user_transcript") or student_answer).strip(),
+            "feedback": str(data.get("feedback") or "").strip(),
+            "mistakes": mistakes_out,
+            "expected_10_of_10": str(data.get("expected_10_of_10") or expected_10_answer).strip(),
+        }

@@ -173,7 +173,8 @@ def build_course_map(bundle):
         for mix in mixes:
             for block in mix.get("book_sections", []):
                 chunk = str(block.get("chunk_id") or "")
-                belongs = chunk.removeprefix("mod-") in ids if chunk.startswith("mod-") else mix is own_mix and clean_text(block["heading"]).casefold() in allowed_headings | {node["title"].casefold()}
+                base_chunk = chunk.removeprefix("mod-").split("::", 1)[0]
+                belongs = base_chunk in ids if chunk.startswith("mod-") else mix is own_mix and (clean_text(block["heading"]).casefold() in allowed_headings | {node["title"].casefold()} or bool(block.get("video_concepts")))
                 if not belongs:
                     continue
                 text = block.get("explanation_markdown", "")
@@ -182,6 +183,7 @@ def build_course_map(bundle):
                     continue
                 blocks.append(block)
         node["book_sections"] = blocks
+        node["topic_summary"] = (own_mix or {}).get("topic_summary")
         placeholder = lambda q: bool(re.search(r"Which key concept is explicitly introduced|How many core study items were indexed|AI Engineer will enrich", q.get("question", "") + q.get("explanation", "")))
         node["quizzes"] = [q for q in (own_mix or {}).get("quizzes", []) if not placeholder(q)]
         node["flashcards"] = [f for f in (own_mix or {}).get("flashcards", []) if not re.search(r"Key Concept #|Core concepts covered", f.get("front", "") + f.get("back", ""))]

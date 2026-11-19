@@ -266,28 +266,30 @@ async function fetchCoursesViaBrowser(moodleOrigin) {
   const sessMatch = myHtml.match(/"sesskey"\s*:\s*"([a-zA-Z0-9]+)"/) || myHtml.match(/sesskey=([a-zA-Z0-9]+)/);
   const sesskey = sessMatch ? sessMatch[1] : '';
   if (sesskey) {
-    try {
-      const ajaxRes = await fetch(
-        `${moodleOrigin}/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=core_course_get_enrolled_courses_by_timeline_classification`,
-        {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify([{
-            index: 0,
-            methodname: 'core_course_get_enrolled_courses_by_timeline_classification',
-            args: { offset: 0, limit: 0, classification: 'all', sort: 'fullname' },
-          }]),
+    for (const classification of ['all', 'inprogress']) {
+      try {
+        const ajaxRes = await fetch(
+          `${moodleOrigin}/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=core_course_get_enrolled_courses_by_timeline_classification`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify([{
+              index: 0,
+              methodname: 'core_course_get_enrolled_courses_by_timeline_classification',
+              args: { offset: 0, limit: 0, classification, sort: 'fullname' },
+            }]),
+          }
+        );
+        if (ajaxRes.ok) {
+          const payload = await ajaxRes.json().catch(() => null);
+          const courses = Array.isArray(payload) && payload[0] && !payload[0].error ? payload[0].data?.courses : null;
+          if (Array.isArray(courses) && courses.length) {
+            return { success: true, courses };
+          }
         }
-      );
-      if (ajaxRes.ok) {
-        const payload = await ajaxRes.json().catch(() => null);
-        const courses = Array.isArray(payload) && payload[0] && !payload[0].error ? payload[0].data?.courses : null;
-        if (Array.isArray(courses) && courses.length) {
-          return { success: true, courses };
-        }
-      }
-    } catch {}
+      } catch {}
+    }
   }
   let courses = extractCoursesFromHtml(myHtml);
   if (!courses.length) {

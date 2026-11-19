@@ -61,6 +61,10 @@ window.createMoodlePicker = function ({courseListUrl, onProgress, onImported, on
       let list;
       try {
         list = await UI.api('/api/courses');
+        if ((!Array.isArray(list) || !list.length) && UI.extensionCall) {
+          const extCourses = await UI.extensionCall('MOODLE_COURSES', {}, 15000);
+          if (extCourses?.success && Array.isArray(extCourses.courses) && extCourses.courses.length) list = extCourses.courses;
+        }
       } catch (coursesErr) {
         if (coursesErr.status === 502 && UI.extensionCall) {
           loadTracker?.update({ detail: 'Отримуємо список через розширення браузера…' });
@@ -81,7 +85,7 @@ window.createMoodlePicker = function ({courseListUrl, onProgress, onImported, on
         <label class="search-field">${icon('search')}<input type="search" data-moodle-search aria-label="Пошук курсів Moodle" placeholder="Знайти курс у Moodle" value="${esc(query)}"></label>
         <div class="picker-list-heading"><label><input type="checkbox" data-select-visible> Обрати всі видимі</label><span data-result-count role="status"></span></div>
       </div><div class="picker-options" role="group" aria-label="Курси Moodle">${courses.map(option).join('')}
-        <p class="picker-message" data-moodle-empty hidden>${courses.length ? 'За цим запитом курсів немає.' : 'У підключеному Moodle курсів немає.'}</p></div>
+        <p class="picker-message" data-moodle-empty ${courses.length ? 'hidden' : ''}>${courses.length ? 'За цим запитом курсів немає.' : 'У підключеному Moodle курсів немає.'}</p></div>
       <footer class="picker-footer">${reconnect}<button class="primary" data-import-moodle disabled>Додати курси</button></footer>`;
       refreshChoices();
     } catch (err) {

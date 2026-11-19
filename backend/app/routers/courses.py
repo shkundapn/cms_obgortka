@@ -52,7 +52,8 @@ async def _get_cached_user_courses(session: Dict[str, Any], refresh: bool = Fals
         sesskey=session.get("sesskey"),
         base_url=site_url,
     )
-    cache.set(site_url, user_id, "courses", raw_courses, ttl_seconds=300.0)
+    if raw_courses:
+        cache.set(site_url, user_id, "courses", raw_courses, ttl_seconds=300.0)
     return raw_courses
 
 

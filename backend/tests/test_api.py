@@ -322,6 +322,7 @@ def test_browser_relayed_pairing_and_course_html_sync_when_server_blocked(monkey
     monkeypatch.setattr(MoodleClient, "get_user_grades", blocked_courses)
 
     assert c.get("/api/courses?refresh=true").status_code == 502
+    assert c.get("/api/courses/888").status_code == 502
     assert c.get("/api/assignments?refresh=true").status_code == 502
     assert c.get("/api/grades?refresh=true").status_code == 502
 

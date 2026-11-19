@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.routers import hustle_extension
-from app.core.exceptions import MoodleException, UnauthorizedError
+from app.core.exceptions import MoodleAuthError, MoodleConnectionError, MoodleException, UnauthorizedError
 from app.core.security import refresh_session_cookies
 from app.core.authorities import get_authority, list_authorities
 from app.routers import auth, courses, assignments, grades, system, events, authorities, workspace, calendar
@@ -79,10 +79,28 @@ async def sliding_session_refresh_middleware(request: Request, call_next):
     return response
 
 # Global Exception Handlers
+@app.exception_handler(MoodleAuthError)
+async def moodle_auth_exception_handler(request: Request, exc: MoodleAuthError):
+    status_code = 502 if exc.error_code == "upstream_blocked" else 401
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": exc.message, "error_code": exc.error_code, "details": exc.details},
+    )
+
+
+@app.exception_handler(MoodleConnectionError)
+async def moodle_connection_exception_handler(request: Request, exc: MoodleConnectionError):
+    return JSONResponse(
+        status_code=502,
+        content={"detail": exc.message, "error_code": exc.error_code, "details": exc.details},
+    )
+
+
 @app.exception_handler(MoodleException)
 async def moodle_exception_handler(request: Request, exc: MoodleException):
+    status_code = 502 if exc.error_code == "upstream_blocked" or "403" in str(exc.message) else 400
     return JSONResponse(
-        status_code=400,
+        status_code=status_code,
         content={"detail": exc.message, "error_code": exc.error_code, "details": exc.details},
     )
 

@@ -1261,6 +1261,7 @@ class MoodleClient:
         target_base = (base_url or self.base_url).rstrip("/")
         restrictions = get_parsing_restrictions()
         clean_cookie = token.replace("MoodleSession=", "").strip(" ;\"'") if token else ""
+        blocked_error: Optional[Exception] = None
 
         # 1. Try AJAX if cookie session
         if auth_type == "cookie" and sesskey:
@@ -1296,22 +1297,37 @@ class MoodleClient:
                             except Exception as exc:
                                 logger.debug("Course introduction enrichment unavailable: %s", type(exc).__name__)
                             return self._enrich_course_sections(parsed, target_base, restrictions)
+            except MoodleAuthError as e:
+                if e.error_code == "upstream_blocked":
+                    blocked_error = blocked_error or e
+                else:
+                    raise
             except Exception as e:
+                if "403" in str(e) and blocked_error is None:
+                    blocked_error = MoodleAuthError(str(e), error_code="upstream_blocked")
                 logger.debug(f"AJAX core_courseformat_get_state failed for course {course_id}: {e}")
 
             # 1b. Try core_course_get_contents via AJAX
-            try:
-                res = await self.call_ajax_ws(
-                    "core_course_get_contents",
-                    cookie=clean_cookie,
-                    sesskey=sesskey,
-                    args={"courseid": course_id},
-                    base_url=target_base,
-                )
-                if isinstance(res, list) and len(res) > 0:
-                    return self._enrich_course_sections(res, target_base, restrictions)
-            except Exception as e:
-                logger.debug(f"AJAX core_course_get_contents failed for course {course_id}: {e}")
+            if blocked_error is None:
+                try:
+                    res = await self.call_ajax_ws(
+                        "core_course_get_contents",
+                        cookie=clean_cookie,
+                        sesskey=sesskey,
+                        args={"courseid": course_id},
+                        base_url=target_base,
+                    )
+                    if isinstance(res, list) and len(res) > 0:
+                        return self._enrich_course_sections(res, target_base, restrictions)
+                except MoodleAuthError as e:
+                    if e.error_code == "upstream_blocked":
+                        blocked_error = blocked_error or e
+                    else:
+                        raise
+                except Exception as e:
+                    if "403" in str(e) and blocked_error is None:
+                        blocked_error = MoodleAuthError(str(e), error_code="upstream_blocked")
+                    logger.debug(f"AJAX core_course_get_contents failed for course {course_id}: {e}")
 
 
         # 2. Try REST Web Services if token
@@ -1325,42 +1341,65 @@ class MoodleClient:
                 )
                 if isinstance(raw, list) and len(raw) > 0:
                     return self._enrich_course_sections(raw, target_base, restrictions)
+            except MoodleAuthError as e:
+                if e.error_code == "upstream_blocked":
+                    blocked_error = blocked_error or e
+                else:
+                    raise
             except Exception as e:
+                if "403" in str(e) and blocked_error is None:
+                    blocked_error = MoodleAuthError(str(e), error_code="upstream_blocked")
                 logger.debug(f"REST core_course_get_contents failed for course {course_id}: {e}")
 
         # 3. Universal HTML Fallback: scrape course page /course/view.php?id={course_id}
         # When WebServices are restricted by university administrators, the student's browser session can ALWAYS
         # fetch the course HTML page with their valid session cookie!
-        if auth_type == "cookie" and clean_cookie:
+        if auth_type == "cookie" and clean_cookie and blocked_error is None:
             try:
                 scraped = await self._scrape_course_contents_html(cookie=clean_cookie, course_id=course_id)
                 if scraped and any(len(s.get("modules", [])) > 0 for s in scraped):
                     return self._enrich_course_sections(scraped, target_base, restrictions)
+            except MoodleAuthError as e:
+                if e.error_code == "upstream_blocked":
+                    blocked_error = blocked_error or e
+                else:
+                    raise
             except Exception as e:
+                if "403" in str(e) and blocked_error is None:
+                    blocked_error = MoodleAuthError(str(e), error_code="upstream_blocked")
                 logger.debug(f"_scrape_course_contents_html failed for course {course_id}: {e}")
 
-            try:
-                course_url = f"{target_base}/course/view.php?id={course_id}"
-                headers = {
-                    "Cookie": f"MoodleSession={clean_cookie}",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Referer": f"{target_base}/my/",
-                }
-                async with httpx.AsyncClient(timeout=self.settings.MOODLE_REQUEST_TIMEOUT, follow_redirects=True, headers=headers) as client:
-                    resp = await client.get(course_url)
-                    if resp.status_code == 200 and "login/index.php" not in str(resp.url):
-                        parsed_sections = self.parse_moodle_course_html(resp.text, base_url=target_base)
-                        if parsed_sections:
-                            return self._enrich_course_sections(parsed_sections, target_base, restrictions)
-            except Exception as e:
-                logger.warning(f"HTML scraping fallback failed for course {course_id}: {e}")
+            if blocked_error is None:
+                try:
+                    course_url = f"{target_base}/course/view.php?id={course_id}"
+                    headers = {
+                        "Cookie": f"MoodleSession={clean_cookie}",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Referer": f"{target_base}/my/",
+                    }
+                    async with httpx.AsyncClient(timeout=self.settings.MOODLE_REQUEST_TIMEOUT, follow_redirects=True, headers=headers) as client:
+                        resp = await client.get(course_url)
+                        if resp.status_code == 403 or resp.headers.get("cf-mitigated"):
+                            blocked_error = blocked_error or MoodleAuthError(
+                                f"Moodle returned HTTP {resp.status_code} for course {course_id}",
+                                error_code="upstream_blocked",
+                            )
+                        elif resp.status_code == 200 and "login/index.php" not in str(resp.url):
+                            parsed_sections = self.parse_moodle_course_html(resp.text, base_url=target_base)
+                            if parsed_sections:
+                                return self._enrich_course_sections(parsed_sections, target_base, restrictions)
+                except Exception as e:
+                    logger.warning(f"HTML scraping fallback failed for course {course_id}: {e}")
 
         # 4. Sandbox / Mock Mode
         if self.settings.MOODLE_MOCK_MODE:
             mock = self._handle_mock_call("core_course_get_contents", {"courseid": course_id})
             if mock:
                 return self._enrich_course_sections(mock, target_base, restrictions)
+
+        if blocked_error is not None:
+            raise blocked_error
 
         return []
 
@@ -2148,6 +2187,9 @@ class MoodleClient:
                     )
                     if isinstance(res, dict) and res.get("usergrades"):
                         return res
+                except MoodleAuthError as exc:
+                    if exc.error_code == "upstream_blocked":
+                        raise
                 except MoodleAPIError:
                     acache.mark_grade_ajax_disabled(self.base_url)
                 except Exception:

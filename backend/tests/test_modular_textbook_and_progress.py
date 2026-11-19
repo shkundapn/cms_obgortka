@@ -291,3 +291,149 @@ def test_module_xp_quiz_mistakes_tutor_gate_and_dashboard_isolation(context, mon
     other_client = TestClient(app)
     iso = other_client.get(f"/api/workspace/courses/{course_id}/learning-progress")
     assert iso.status_code == 404
+
+
+def test_expert_video_analyst_structures_textbook_with_analogies_critique_and_html_urls(context, monkeypatch):
+    client, store = context
+    from app.models.mix import ExtensionModuleItem, ExtensionSectionPayload
+    from app.services.mix_generator import extract_text_from_upload
+
+    # 1. HTML extractor preserves embedded YouTube URLs instead of stripping <a href>/<iframe src>
+    html_bytes = (
+        b'<html><body><p>Lecture page</p>'
+        b'<iframe src="https://www.youtube.com/embed/aircAruvnKk"></iframe></body></html>'
+    )
+    extracted_html = extract_text_from_upload("lecture.html", html_bytes)
+    assert "https://www.youtube.com/watch?v=aircAruvnKk" in extracted_html
+
+    # 2. Extension sync section filter preserves mod.url YouTube links
+    sec_payload = ExtensionSectionPayload(
+        section_index=1,
+        title="Neural Networks",
+        modules=[
+            ExtensionModuleItem(
+                module_id=77,
+                name="Video Lecture",
+                modname="url",
+                url="https://youtu.be/aircAruvnKk",
+            )
+        ],
+    )
+    serialized, _, _, sec_chunks = store._filter_and_serialize_section(sec_payload)
+    assert "https://www.youtube.com/watch?v=aircAruvnKk" in serialized
+    assert "https://www.youtube.com/watch?v=aircAruvnKk" in sec_chunks[0]["content_text"]
+
+    # 3. Full Expert Video Analyst pipeline flows into textbook structure when YouTube link is pasted in text
+    def fake_transcript(youtube_url, preferred_languages=None):
+        return {
+            "success": True,
+            "video_id": "aircAruvnKk",
+            "language": "en",
+            "source": "youtube_captions",
+            "full_text": "Perceptrons compute weighted sums and pass them through activations. Backpropagation updates weights.",
+            "segments": [
+                {"text": "A neuron takes inputs and multiplies by weights.", "start_seconds": 12.0, "duration": 10.0},
+                {"text": "Backpropagation propagates gradients from output to input.", "start_seconds": 185.0, "duration": 15.0},
+            ],
+        }
+
+    monkeypatch.setattr(VideoTranscriberService, "get_youtube_transcript", classmethod(lambda cls, *a, **kw: fake_transcript(*a, **kw)))
+
+    # Connect Gemini before creating text course so immediate textbook build uses Expert Video Analyst
+    guest_res = client.post("/api/workspace/courses/create-text", json={
+        "title": "Deep Learning",
+        "topic_title": "Intro",
+        "content_text": "Placeholder intro notes for owner setup.",
+        "tools_config": {"mermaid_diagrams": False, "visual_cards": False},
+    })
+    assert guest_res.status_code == 200
+    owner_id = client.get(f"/api/workspace/courses/{guest_res.json()['course_id']}").json()["course"]["owner_id"]
+    install_key(store, owner_id)
+
+    async def fake_expert_gemini(self, prompt, **kwargs):
+        if "СУБТИТРИ ВІДЕО" in prompt:
+            assert "1-2 clear everyday analogies" in prompt
+            assert "critical analysis" in prompt.lower()
+            return json.dumps({
+                "video_summary": "Пояснення перцептрона та градієнтного навчання.",
+                "core_message": "Нейронні мережі навчаються шляхом налаштування ваг за градієнтом похибки.",
+                "structured_summary": "Лекція розбирає структуру нейрона та алгоритм зворотного поширення похибки на прикладі розпізнавання цифр.",
+                "concepts": [
+                    {
+                        "concept_title": "Перцептрон і ваги",
+                        "start_seconds": 12,
+                        "end_seconds": 180,
+                        "timecode": "00:12",
+                        "summary": "Зважена сума входів та функція активації.",
+                        "analogies": [
+                            "Як журі конкурсу: кожен суддя має різну вагу голосу перед фінальним рішенням."
+                        ],
+                        "explanation_markdown": "Формально вихід нейрона задається як $\\sigma(w \\cdot x + b)$.",
+                    },
+                    {
+                        "concept_title": "Зворотне поширення похибки",
+                        "start_seconds": 185,
+                        "end_seconds": 420,
+                        "timecode": "03:05",
+                        "summary": "Правило ланцюга для оновлення параметрів.",
+                        "analogies": [
+                            "Як налаштування рецепту страви: визначаємо, який інгредієнт зіпсував смак, і коригуємо його пропорцію."
+                        ],
+                        "explanation_markdown": "Градієнт обчислюється через похідну складеної функції.",
+                    },
+                ],
+                "critical_analysis": {
+                    "pros_and_cons": "Плюс: універсальна апроксимація; мінус: потреба у великих даних.",
+                    "perspectives": "Освітній погляд: чудова візуальна інтуїція; практичний: потребує GPU для великих моделей.",
+                    "public_trends": "Фундаментальна тема сучасного AI.",
+                    "evidence_facts": "Емпірично підтверджено на датасеті MNIST (784 входи -> 10 класів).",
+                },
+                "actionable_framework": "1. Ініціалізувати ваги.\n2. Прямий прохід.\n3. Порахувати втрати.\n4. Оновити ваги.",
+                "memory_aids": "Якір: Прямо -> Похибка -> Назад (П-П-Н).",
+                "final_verdict": "Оцінка інформативності: 9.5/10 — обов'язковий фундамент перед трансформерами.",
+            })
+        if "multiple-choice" in prompt:
+            return json.dumps([{
+                "question": "Що робить backpropagation?",
+                "options": ["Оновлює ваги за градієнтом", "Видаляє дані"],
+                "correct_index": 0,
+                "explanation": "Метод передає градієнт похибки назад мережею.",
+            }])
+        if "flashcards" in prompt:
+            return json.dumps([{"front": "Перцептрон", "back": "w*x + b через активацію"}])
+        return json.dumps({
+            "short_description": "Розділ підручника з аналогіями, критичним аналізом і таймкодами.",
+            "explanation_markdown": "## Модуль підручника\n\nПовне пояснення з аналогією та критичним аналізом.",
+            "key_takeaways": ["Ваги", "Градієнт"],
+            "module_quizzes": [{
+                "question": "Навіщо потрібне правило ланцюга?",
+                "options": ["Для обчислення градієнтів по шарах", "Для завантаження файлів"],
+                "correct_index": 0,
+                "explanation": "Правило ланцюга дозволяє знайти похідну втрат по кожній вазі.",
+            }],
+            "tutor_question": "Поясніть інтуїцію ваг нейрона через аналогію.",
+            "tutor_expected_answer": "Ваги визначають вплив кожного вхідного сигналу, подібно до ваги голосу суддів.",
+        })
+
+    monkeypatch.setattr(GeminiService, "generate_content", fake_expert_gemini)
+
+    yt_course_res = client.post("/api/workspace/courses/create-text", json={
+        "title": "Нейронні мережі",
+        "topic_title": "Основи нейромереж",
+        "content_text": "Подивись цю лекцію: https://www.youtube.com/watch?v=aircAruvnKk",
+        "tools_config": {"mermaid_diagrams": False, "visual_cards": False},
+    })
+    assert yt_course_res.status_code == 200
+    yt_cid = yt_course_res.json()["course_id"]
+    bundle = client.get(f"/api/workspace/courses/{yt_cid}").json()
+    mix = bundle["topic_mixes"][0]
+
+    # 2 concept modules + 1 synthesis module ("Критичний аналіз, практичний фреймворк і мнемоніка")
+    assert len(mix["book_sections"]) == 3
+    headings = [s["heading"] for s in mix["book_sections"]]
+    assert "Перцептрон і ваги" in headings
+    assert "Зворотне поширення похибки" in headings
+    assert any("Критичний аналіз" in h for h in headings)
+    assert mix["book_sections"][0]["video_concepts"][0]["youtube_url"] == "https://www.youtube.com/watch?v=aircAruvnKk&t=12s"
+    assert bundle["topic_mixes"][0]["materials"][0]["has_transcript"] is True
+

@@ -319,20 +319,26 @@ Course Data:
 You are an expert university professor writing a comprehensive, exhaustive textbook module in Ukrainian:
 {context_block}Module title: "{title}"
 Ingested source material:
-{content_text[:16000]}
+{content_text[:24000]}
 {vc_block}
 Keywords: {kw_str}
 
 Grounding rules:
 - Stay strictly within the academic domain of the Course and Topic above.
 - Never drift into unrelated disciplines or treat Moodle activity names as course concepts to meta-explain.
-- Use ALL relevant material from the source text and video transcript — do not summarize superficially; provide a deep, richly explained textbook module.
+- Use ALL relevant material from the source text and video transcript/analysis — do not summarize superficially; provide a deep, richly explained textbook module.
 - Use valid LaTeX ($...$ inline and $$...$$ display) for mathematical notation, formulas, and derivations.
-- If video concepts with timestamps are listed above, explicitly weave into the prose where we analyze each concept and invite the student to watch the exact YouTube timestamp link.
+- If video concepts with timestamps are listed above, explicitly weave into the prose where we analyze each concept and invite the student to watch the exact YouTube timestamp link (`[MM:SS](youtube_url)`).
+- When the source includes YouTube video analysis or transcripts, structure the textbook chapter so it preserves and deepens:
+  1. Core message, formal definitions, supporting arguments, and concrete data/examples from the video.
+  2. 1-2 clear, relatable everyday analogies per major concept to make abstract ideas intuitive.
+  3. Critical analysis (pros & cons, educational/ethical/practical perspectives, general reception/trends, and science/data-backed facts where applicable).
+  4. A customizable step-by-step actionable framework (when relevant to the topic).
+  5. Memory aids (mnemonics or mental anchors) and key takeaway metric/verdict.
 
 Please generate a comprehensive textbook module in Ukrainian covering:
 1. "short_description": 1-2 sentence overview of what this module covers.
-2. "explanation_markdown": Very thorough, in-depth Markdown chapter (800-1800 words when source allows) with clear subsections: formal definitions, intuition, mathematical/conceptual derivations, worked step-by-step examples, edge cases & pitfalls, and practical applications.
+2. "explanation_markdown": Very thorough, in-depth Markdown chapter (800-1800 words when source allows) with clear subsections: formal definitions, intuition & everyday analogies, mathematical/conceptual derivations, supporting arguments & worked step-by-step examples, edge cases / critical analysis (pros & cons, perspectives), actionable framework (when relevant), memory aids/mnemonics, and practical applications.
 3. "key_takeaways": 4-6 crisp takeaways.
 4. "module_quizzes": 2-3 conceptual self-check items (4 options each, correct_index 0..3, explanation) testing this specific module.
 5. "tutor_question": 1 probing conceptual open question for the AI Tutor check of this module (student must score >= 4/10).
@@ -525,6 +531,101 @@ Rules:
             return clean
         return None
 
+    _EXPERT_VIDEO_ANALYST_INSTRUCTIONS = (
+        "You are an expert video analyst. Perform all of the following steps thoroughly in Ukrainian:\n"
+        "1. Access and accurately transcribe/index the full video content with key timestamps [MM:SS] or [HH:MM:SS].\n"
+        "2. Deeply analyze the video to identify the core message, main concepts, supporting arguments, and any data or examples presented.\n"
+        "3. Extract the essential knowledge points and organize them into a concise, structured summary (300-600 words).\n"
+        "4. For each major point/concept, explain it using 1-2 clear everyday analogies to make complex ideas relatable.\n"
+        "5. Provide a critical analysis: pros and cons, different perspectives (educational, ethical, practical), public opinions/general trends, and science/data-backed facts where applicable.\n"
+        "6. Include a customizable step-by-step actionable framework derived from the content (when relevant).\n"
+        "7. End with memory aids (mnemonics or mental anchors for retention) plus a final verdict or key takeaway metric (e.g., efficiency/applicability score)."
+    )
+
+    @staticmethod
+    def _normalize_youtube_analysis(
+        data: Dict[str, Any], video_id: str, include_full_notes: bool = False
+    ) -> Dict[str, Any]:
+        """Normalize structured Expert Video Analyst JSON into canonical concept & textbook-ready fields."""
+        concepts: List[Dict[str, Any]] = []
+        for idx, c in enumerate(data.get("concepts") or []):
+            if not isinstance(c, dict) or not c.get("concept_title"):
+                continue
+            start_s = max(0, int(float(c.get("start_seconds") or 0)))
+            end_s_raw = c.get("end_seconds")
+            end_s = int(float(end_s_raw)) if end_s_raw is not None else None
+            m, s = divmod(start_s, 60)
+            h, m = divmod(m, 60)
+            tc = str(c.get("timecode") or (f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}")).strip()
+            analogies = [str(a).strip() for a in (c.get("analogies") or []) if str(a).strip()][:2]
+            exp_md = str(c.get("explanation_markdown") or "").strip()
+            if analogies and "аналог" not in exp_md.lower():
+                analogy_md = "\n".join(f"- {a}" for a in analogies)
+                exp_md = f"{exp_md}\n\n#### Аналогії з повсякденного життя\n{analogy_md}".strip()
+            concepts.append({
+                "id": f"yt-{video_id}-{start_s}-{idx}",
+                "concept_title": str(c["concept_title"]).strip(),
+                "start_seconds": start_s,
+                "end_seconds": end_s,
+                "timecode": tc,
+                "youtube_url": f"https://www.youtube.com/watch?v={video_id}&t={start_s}s",
+                "summary": str(c.get("summary") or "").strip(),
+                "analogies": analogies,
+                "explanation_markdown": exp_md,
+            })
+
+        critical = data.get("critical_analysis")
+        if isinstance(critical, dict):
+            crit_parts = []
+            label_map = (
+                ("pros_and_cons", "Переваги та недоліки"),
+                ("perspectives", "Освітній, етичний та практичний погляди"),
+                ("public_trends", "Суспільне сприйняття та тренди"),
+                ("evidence_facts", "Науково та емпірично підтверджені факти"),
+            )
+            for key, label in label_map:
+                val = critical.get(key)
+                if isinstance(val, list):
+                    val_str = "\n".join(f"- {str(v).strip()}" for v in val if str(v).strip())
+                else:
+                    val_str = str(val or "").strip()
+                if val_str:
+                    crit_parts.append(f"#### {label}\n{val_str}")
+            critical_md = "\n\n".join(crit_parts)
+        else:
+            critical_md = str(critical or "").strip()
+
+        fw_raw = data.get("actionable_framework")
+        if isinstance(fw_raw, list):
+            framework_md = "\n".join(f"{i}. {str(step).strip()}" for i, step in enumerate(fw_raw, 1) if str(step).strip())
+        else:
+            framework_md = str(fw_raw or "").strip()
+
+        mem_raw = data.get("memory_aids")
+        if isinstance(mem_raw, list):
+            memory_md = "\n".join(f"- {str(m).strip()}" for m in mem_raw if str(m).strip())
+        else:
+            memory_md = str(mem_raw or "").strip()
+
+        core_message = str(data.get("core_message") or "").strip()
+        structured_summary = str(data.get("structured_summary") or "").strip()
+        final_verdict = str(data.get("final_verdict") or "").strip()
+        video_summary = str(data.get("video_summary") or core_message or structured_summary[:300]).strip()
+
+        result: Dict[str, Any] = {
+            "video_summary": video_summary,
+            "core_message": core_message,
+            "structured_summary": structured_summary,
+            "critical_analysis": critical_md,
+            "actionable_framework": framework_md,
+            "memory_aids": memory_md,
+            "final_verdict": final_verdict,
+            "concepts": concepts,
+        }
+        if include_full_notes:
+            result["full_notes"] = str(data.get("full_notes") or "").strip()
+        return result
+
     async def summarize_youtube_video(
         self,
         youtube_url: str,
@@ -532,7 +633,7 @@ Rules:
         course_title: str = "",
         raise_on_error: bool = False,
     ) -> Optional[str]:
-        """Extract structured lecture notes from a YouTube URL natively via Gemini fileData."""
+        """Extract expert video analysis and structured lecture notes from a YouTube URL natively via Gemini fileData."""
         if not self.is_available:
             return None
         from app.services.video_transcriber import VideoTranscriberService
@@ -548,15 +649,14 @@ Rules:
         ctx_line = ("\n".join(ctx) + "\n") if ctx else ""
         prompt = (
             f"{ctx_line}"
-            "Watch and listen to this educational video and write structured study notes in Ukrainian "
-            "covering all key definitions, formulas (using LaTeX $...$ / $$...$$ when appropriate), "
-            "theorems, examples, and step-by-step explanations taught in the video. "
-            "Include only content actually presented in the video."
+            f"{self._EXPERT_VIDEO_ANALYST_INSTRUCTIONS}\n\n"
+            "Write the full analysis in Ukrainian using clean Markdown with LaTeX ($...$ / $$...$$) where appropriate. "
+            "Include only content grounded in the video."
         )
         try:
             return await self.generate_content(
                 prompt,
-                system_instruction="You extract accurate academic lecture notes from educational videos in Ukrainian.",
+                system_instruction="You are an expert video analyst extracting accurate timestamped lecture notes, analogies, critical analysis, actionable frameworks, and memory aids in Ukrainian.",
                 temperature=0.2,
                 timeout=120.0,
                 extra_parts=[{"fileData": {"fileUri": norm, "mimeType": "video/mp4"}}],
@@ -579,7 +679,7 @@ Rules:
         course_title: str = "",
         raise_on_error: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """Analyze full timestamped YouTube subtitles into chronological concept blocks with exact start/end timecodes."""
+        """Analyze full timestamped YouTube subtitles into an Expert Video Analyst dossier + chronological concept blocks."""
         if not self.is_available or not timestamped_transcript.strip():
             return None
 
@@ -590,8 +690,10 @@ Rules:
             ctx.append(f'Тема/матеріал: "{title}"')
         ctx_line = ("\n".join(ctx) + "\n") if ctx else ""
 
-        prompt = f"""{ctx_line}Нижче наведено повні субтитри відеолекції ({youtube_url}) з точними таймкодами [MM:SS] або [HH:MM:SS].
-Проаналізуй УВЕСЬ зміст відео без втрати матеріалу та розбий його на логічні хронологічні підпункти (концепти), у кожному з яких пояснюється один окремий концепт, означення, теорема чи приклад з відео.
+        prompt = f"""{ctx_line}{self._EXPERT_VIDEO_ANALYST_INSTRUCTIONS}
+
+Нижче наведено повні субтитри відеолекції ({youtube_url}) з точними таймкодами [MM:SS] або [HH:MM:SS].
+Проаналізуй УВЕСЬ зміст відео без втрати матеріалу, виокреми головну ідею, підтримуючі аргументи, дані/приклади, розбий на логічні хронологічні концепти (для підручника) з 1-2 повсякденними аналогіями на кожен ключовий пункт, додай критичний аналіз, покроковий практичний фреймворк, мнемонічні якорі та фінальний вердикт/метрику.
 
 СУБТИТРИ ВІДЕО:
 {timestamped_transcript[:42000]}
@@ -599,6 +701,8 @@ Rules:
 Поверни строго JSON-об'єкт такого формату:
 {{
   "video_summary": "Короткий підсумок усього відео (2-3 речення українською).",
+  "core_message": "Головний меседж / центральна теза відео (1-2 речення).",
+  "structured_summary": "Структуроване резюме ключових знань, аргументів і прикладів з відео (300-600 слів українською).",
   "concepts": [
     {{
       "concept_title": "Чітка назва концепту (українською)",
@@ -606,15 +710,28 @@ Rules:
       "end_seconds": 360,
       "timecode": "02:00",
       "summary": "Стисла суть концепту з відео (2 речення).",
-      "explanation_markdown": "Детальне академічне пояснення цього концепту на основі слів лектора: означення, формули у LaTeX ($...$ / $$...$$), інтуїція та приклади з відео."
+      "analogies": [
+        "Аналогія 1: порівняння складної ідеї з буденною ситуацією.",
+        "Аналогія 2: ще один наочний приклад з життя."
+      ],
+      "explanation_markdown": "Детальне академічне пояснення цього концепту на основі слів лектора: означення, формули у LaTeX ($...$ / $$...$$), підтримуючі аргументи, дані/приклади з відео та 1-2 зрозумілі аналогії."
     }}
-  ]
+  ],
+  "critical_analysis": {{
+    "pros_and_cons": "Сильні сторони, обмеження та компроміси підходу/концепцій у відео.",
+    "perspectives": "Освітній, етичний та практичний погляди.",
+    "public_trends": "Суспільне сприйняття / загальні тренди в галузі.",
+    "evidence_facts": "Науково чи емпірично підтверджені факти (якщо застосовно)."
+  }},
+  "actionable_framework": "Налаштовуваний покроковий практичний фреймворк застосування матеріалу (Markdown список кроків).",
+  "memory_aids": "Мнемонічні прийоми, асоціативні якорі або формули для запам'ятовування.",
+  "final_verdict": "Фінальний вердикт та метрика цінності/ефективності засвоєння (наприклад, індекс практичної користі та головний висновок)."
 }}
 """
         try:
             res = await self.generate_content(
                 prompt,
-                system_instruction="You analyze full timestamped lecture transcripts and split them into well-explained chronological concept segments in Ukrainian. Output valid JSON only.",
+                system_instruction="You are an expert video analyst. Analyze full timestamped lecture transcripts into structured concepts with analogies, critical analysis, actionable frameworks, memory aids, and textbook-ready explanations in Ukrainian. Output valid JSON only.",
                 json_mode=True,
                 temperature=0.2,
                 timeout=60.0,
@@ -626,7 +743,6 @@ Rules:
             try:
                 data = json.loads(clean)
             except Exception:
-                # Graceful plain-text fallback (e.g. non-JSON video notes or test mocks)
                 plain = res.strip()
                 return {
                     "video_summary": plain[:300],
@@ -635,30 +751,7 @@ Rules:
                 }
             if not isinstance(data, dict):
                 return None
-            concepts = []
-            for idx, c in enumerate(data.get("concepts") or []):
-                if not isinstance(c, dict) or not c.get("concept_title"):
-                    continue
-                start_s = max(0, int(float(c.get("start_seconds") or 0)))
-                end_s_raw = c.get("end_seconds")
-                end_s = int(float(end_s_raw)) if end_s_raw is not None else None
-                m, s = divmod(start_s, 60)
-                h, m = divmod(m, 60)
-                tc = str(c.get("timecode") or (f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}")).strip()
-                concepts.append({
-                    "id": f"yt-{video_id}-{start_s}-{idx}",
-                    "concept_title": str(c["concept_title"]).strip(),
-                    "start_seconds": start_s,
-                    "end_seconds": end_s,
-                    "timecode": tc,
-                    "youtube_url": f"https://www.youtube.com/watch?v={video_id}&t={start_s}s",
-                    "summary": str(c.get("summary") or "").strip(),
-                    "explanation_markdown": str(c.get("explanation_markdown") or "").strip(),
-                })
-            return {
-                "video_summary": str(data.get("video_summary") or "").strip(),
-                "concepts": concepts,
-            }
+            return self._normalize_youtube_analysis(data, video_id, include_full_notes=False)
         except LearningProviderError:
             if raise_on_error:
                 raise
@@ -675,7 +768,7 @@ Rules:
         course_title: str = "",
         raise_on_error: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """When captions are unavailable, use Gemini native video understanding to extract full notes + timestamped concepts."""
+        """When captions are unavailable, use Gemini native video understanding to run the Expert Video Analyst workflow."""
         if not self.is_available:
             return None
         from app.services.video_transcriber import VideoTranscriberService
@@ -692,12 +785,15 @@ Rules:
 
         prompt = (
             f"{ctx_line}"
-            "Уважно переглянь та прослухай це навчальне відео повністю. Розбий його на хронологічні концепти з точними таймкодами "
-            "та напиши детальний структурований конспект українською мовою без втрати матеріалу.\n\n"
+            f"{self._EXPERT_VIDEO_ANALYST_INSTRUCTIONS}\n\n"
+            "Уважно переглянь та прослухай це навчальне відео повністю, зафіксуй точний транскрипт/конспект із таймкодами "
+            "та розбий матеріал на хронологічні концепти для побудови підручника.\n\n"
             "Поверни строго JSON:\n"
             "{\n"
             '  "video_summary": "Короткий огляд відео (2-3 речення)",\n'
-            '  "full_notes": "Повний детальний конспект усіх пояснень, формул (LaTeX), теорем і прикладів з відео",\n'
+            '  "core_message": "Головний меседж / центральна теза відео",\n'
+            '  "structured_summary": "Структуроване резюме ключових знань (300-600 слів українською)",\n'
+            '  "full_notes": "Повний транскрипт/конспект із ключовими таймкодами [MM:SS], формулами (LaTeX), аргументами, даними та прикладами з відео",\n'
             '  "concepts": [\n'
             "    {\n"
             '      "concept_title": "Назва концепту",\n'
@@ -705,15 +801,25 @@ Rules:
             '      "end_seconds": 180,\n'
             '      "timecode": "00:00",\n'
             '      "summary": "Суть концепту",\n'
-            '      "explanation_markdown": "Детальне пояснення цього концепту з відео"\n'
+            '      "analogies": ["Аналогія 1 з повсякденного життя", "Аналогія 2"],\n'
+            '      "explanation_markdown": "Детальне пояснення цього концепту з відео, аргументи, приклади та 1-2 аналогії"\n'
             "    }\n"
-            "  ]\n"
+            "  ],\n"
+            '  "critical_analysis": {\n'
+            '    "pros_and_cons": "Плюси та мінуси",\n'
+            '    "perspectives": "Освітній, етичний і практичний погляди",\n'
+            '    "public_trends": "Суспільне сприйняття / загальні тренди",\n'
+            '    "evidence_facts": "Науково та емпірично підтверджені факти"\n'
+            "  },\n"
+            '  "actionable_framework": "Покроковий налаштовуваний практичний фреймворк",\n'
+            '  "memory_aids": "Мнемоніки та ментальні якорі",\n'
+            '  "final_verdict": "Фінальний вердикт та метрика ефективності/користі"\n'
             "}"
         )
         try:
             res = await self.generate_content(
                 prompt,
-                system_instruction="You watch educational videos and output complete timestamped concept structures and lecture notes in Ukrainian JSON.",
+                system_instruction="You watch educational videos as an expert video analyst and output complete timestamped transcriptions, concept structures, analogies, critical analysis, actionable frameworks, and memory aids in Ukrainian JSON.",
                 json_mode=True,
                 temperature=0.2,
                 timeout=120.0,
@@ -726,7 +832,6 @@ Rules:
             try:
                 data = json.loads(clean)
             except Exception:
-                # Graceful plain-text fallback (e.g. non-JSON video notes or test mocks)
                 plain = res.strip()
                 return {
                     "video_summary": plain[:300],
@@ -735,31 +840,7 @@ Rules:
                 }
             if not isinstance(data, dict):
                 return None
-            concepts = []
-            for idx, c in enumerate(data.get("concepts") or []):
-                if not isinstance(c, dict) or not c.get("concept_title"):
-                    continue
-                start_s = max(0, int(float(c.get("start_seconds") or 0)))
-                end_s_raw = c.get("end_seconds")
-                end_s = int(float(end_s_raw)) if end_s_raw is not None else None
-                m, s = divmod(start_s, 60)
-                h, m = divmod(m, 60)
-                tc = str(c.get("timecode") or (f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}")).strip()
-                concepts.append({
-                    "id": f"yt-{video_id}-{start_s}-{idx}",
-                    "concept_title": str(c["concept_title"]).strip(),
-                    "start_seconds": start_s,
-                    "end_seconds": end_s,
-                    "timecode": tc,
-                    "youtube_url": f"https://www.youtube.com/watch?v={video_id}&t={start_s}s",
-                    "summary": str(c.get("summary") or "").strip(),
-                    "explanation_markdown": str(c.get("explanation_markdown") or "").strip(),
-                })
-            return {
-                "video_summary": str(data.get("video_summary") or "").strip(),
-                "full_notes": str(data.get("full_notes") or "").strip(),
-                "concepts": concepts,
-            }
+            return self._normalize_youtube_analysis(data, video_id, include_full_notes=True)
         except LearningProviderError:
             if raise_on_error:
                 raise

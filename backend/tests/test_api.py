@@ -244,18 +244,39 @@ def test_browser_relayed_pairing_and_course_html_sync_when_server_blocked(monkey
 
     course_html = (
         '<html><body><ul>'
-        '<li id="section-1"><h3 class="sectionname">Тема 1: Графи</h3>'
+        '<li id="section-1" class="section">'
+        '<div class="course-section-header">'
+        '<h3 class="sectionname">'
+        '<span class="visually-hidden">Виберіть секцію Нова секція</span>'
+        '<a class="icons-collapse-expand"><span>Згорнути</span><span>Розгорнути</span></a>'
+        '<a href="/course/section.php?id=1">Лекція</a>'
+        '</h3></div>'
         '<a href="https://learn.ucu.edu.ua/mod/page/view.php?id=301">Вступ до графів</a>'
         '</li></ul></body></html>'
     )
+    import base64
+    att_b64 = base64.b64encode("Граф складається з вершин та ребер.".encode("utf-8")).decode("ascii")
     sync_res = c.post(
         "/api/workspace/courses/888/sync-moodle",
-        json={"course_title": "Алгоритми", "shortname": "ALG", "course_html": course_html, "fetch_files": False},
+        json={
+            "course_title": "Алгоритми",
+            "shortname": "ALG",
+            "course_html": course_html,
+            "module_contents": [
+                {"module_id": 301, "text_excerpt": "Додатковий опис сторінки", "attachment_filename": "notes.txt", "attachment_base64": att_b64}
+            ],
+            "fetch_files": False,
+        },
     )
     assert sync_res.status_code == 200
     bundle = c.get("/api/workspace/courses/888")
     assert bundle.status_code == 200
     assert bundle.json()["course"]["title"] == "Алгоритми"
-    assert bundle.json()["sections"][0]["name"] == "Тема 1: Графи"
+    assert bundle.json()["sections"][0]["name"] == "Лекція"
+    from app.services.workspace_store import get_workspace_store
+    stored_bundle = get_workspace_store().get_course_bundle(888, owner_id=bundle.json()["course"]["owner_id"])
+    snap_text = "\n".join(s.content_text for s in stored_bundle["snapshots"])
+    assert "Додатковий опис сторінки" in snap_text
+    assert "Граф складається з вершин та ребер." in snap_text
 
 

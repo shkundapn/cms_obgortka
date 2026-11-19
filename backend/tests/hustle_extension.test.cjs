@@ -94,11 +94,16 @@ test('extension relays /my/, courses, and course HTML when server gets 502 from 
    return {ok:true,status:200,json:async()=>[{error:false,data:{courses:[{id:42,fullname:'Алгоритми',shortname:'ALG'}]}}]};
   }
   if(url==='https://learn.ucu.edu.ua/course/view.php?id=42'){
-   return {ok:true,status:200,url,text:async()=>'<html><li id="section-1"><h3 class="sectionname">Тема 1</h3></li></html>'};
+   return {ok:true,status:200,url,text:async()=>'<html><li id="section-1"><h3 class="sectionname">Тема 1</h3><a href="/mod/page/view.php?id=99">Сторінка 1</a></li></html>'};
+  }
+  if(url==='https://learn.ucu.edu.ua/mod/page/view.php?id=99'){
+   return {ok:true,status:200,url,headers:{get:()=>'text/html'},text:async()=>'<html><div role="main"><p>Повний текст лекції про алгоритми.</p></div></html>'};
   }
   if(url.endsWith('/sync-moodle')){
    const body=JSON.parse(options.body);
    assert.ok(body.course_html.includes('Тема 1'));
+   assert.equal(body.module_contents[0].module_id,99);
+   assert.ok(body.module_contents[0].text_excerpt.includes('Повний текст лекції'));
    return {ok:true,status:200,json:async()=>({success:true,course_id:42})};
   }
   return {ok:true,status:200,json:async()=>({})};

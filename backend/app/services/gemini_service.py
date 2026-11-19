@@ -141,7 +141,7 @@ class GeminiService:
         system_instruction: Optional[str] = None,
         json_mode: bool = False,
         temperature: float = 0.2,
-        timeout: float = 30.0,
+        timeout: float = 60.0,
         extra_parts: Optional[List[Dict[str, Any]]] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
         raise_on_error: bool = False,
@@ -183,17 +183,24 @@ class GeminiService:
                 resp = None
                 token_refreshed = False
                 rate_retries = 0
-                max_rate_retries = 3
-                vertex_fallbacks = [
-                    (self.vertex_location, self.model),
-                    ("global", "gemini-2.5-flash"),
-                    ("us-central1", "gemini-2.5-flash"),
-                    ("us-central1", "gemini-2.0-flash"),
-                ]
-                vertex_fb_idx = 0
+                max_rate_retries = 2
+                if self.vertex_project:
+                    raw_targets = [
+                        (self.vertex_location, self.model),
+                        ("global", "gemini-2.5-flash"),
+                        ("us-central1", "gemini-2.5-flash"),
+                        ("us-central1", "gemini-2.0-flash"),
+                    ]
+                else:
+                    raw_targets = [
+                        ("", m)
+                        for m in dict.fromkeys([self.model, "gemini-2.5-flash", "gemini-2.0-flash"])
+                    ]
+                targets = list(dict.fromkeys(raw_targets))
+                fb_idx = 0
                 while True:
+                    loc, mdl = targets[min(fb_idx, len(targets) - 1)]
                     if self.vertex_project:
-                        loc, mdl = vertex_fallbacks[min(vertex_fb_idx, len(vertex_fallbacks) - 1)]
                         host = (
                             "aiplatform.googleapis.com"
                             if loc == "global"
@@ -214,42 +221,71 @@ class GeminiService:
                             "X-Goog-User-Project": self.vertex_project,
                         }
                     else:
-                        url = f"{self.BASE_URL}/{self.model}:generateContent"
+                        url = f"{self.BASE_URL}/{mdl}:generateContent"
                         headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
 
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        resp = await client.post(url, json=payload, headers=headers)
+                    try:
+                        async with httpx.AsyncClient(timeout=timeout) as client:
+                            resp = await client.post(url, json=payload, headers=headers)
+                    except httpx.TimeoutException:
+                        if fb_idx + 1 < len(targets):
+                            fb_idx += 1
+                            next_mdl = targets[fb_idx][1]
+                            logger.warning(
+                                "Gemini API (%s, model=%s) timed out; falling back to %s",
+                                provider_kind,
+                                mdl,
+                                next_mdl,
+                            )
+                            rate_retries = 0
+                            continue
+                        raise
 
                     if self.vertex_project and resp.status_code == 401 and not token_refreshed:
                         _VERTEX_TOKEN_CACHE["token"] = None
                         token_refreshed = True
                         continue
 
-                    if self.vertex_project and resp.status_code == 404 and vertex_fb_idx + 1 < len(vertex_fallbacks):
-                        vertex_fb_idx += 1
-                        next_loc, next_mdl = vertex_fallbacks[vertex_fb_idx]
+                    if resp.status_code == 404 and fb_idx + 1 < len(targets):
+                        fb_idx += 1
+                        next_loc, next_mdl = targets[fb_idx]
                         logger.warning(
-                            "Vertex AI model %s not found (404); falling back to %s (%s)",
-                            self.model,
+                            "Gemini API (%s, model=%s) not found (404); falling back to %s%s",
+                            provider_kind,
+                            mdl,
                             next_mdl,
-                            next_loc,
+                            f" ({next_loc})" if next_loc else "",
                         )
+                        rate_retries = 0
                         continue
 
-                    if resp.status_code in (429, 503) and rate_retries < max_rate_retries:
-                        delay = _retry_delay_seconds(resp, rate_retries)
-                        rate_retries += 1
-                        logger.warning(
-                            "Gemini API (%s, model=%s) returned HTTP %s; retrying in %.2fs (attempt %d/%d)",
-                            provider_kind,
-                            self.model,
-                            resp.status_code,
-                            delay,
-                            rate_retries,
-                            max_rate_retries,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
+                    if resp.status_code in (429, 503):
+                        if fb_idx == 0 and rate_retries < max_rate_retries:
+                            delay = _retry_delay_seconds(resp, rate_retries)
+                            rate_retries += 1
+                            logger.warning(
+                                "Gemini API (%s, model=%s) returned HTTP %s; retrying in %.2fs (attempt %d/%d)",
+                                provider_kind,
+                                mdl,
+                                resp.status_code,
+                                delay,
+                                rate_retries,
+                                max_rate_retries,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        if fb_idx + 1 < len(targets):
+                            fb_idx += 1
+                            next_mdl = targets[fb_idx][1]
+                            logger.warning(
+                                "Gemini API (%s, model=%s) returned HTTP %s; falling back to %s",
+                                provider_kind,
+                                mdl,
+                                resp.status_code,
+                                next_mdl,
+                            )
+                            rate_retries = 0
+                            continue
                     break
 
             if resp is None or resp.status_code != 200:

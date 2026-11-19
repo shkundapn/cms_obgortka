@@ -316,6 +316,24 @@ async def test_latex_backslashes_and_wrapped_json_do_not_raise_incomplete_result
         assert len(cards) == 1 and "\\alpha" in cards[0].front
 
 
+@pytest.mark.asyncio
+async def test_timeout_on_primary_model_falls_back_to_gemini_25_flash(monkeypatch):
+    seen_urls = []
+
+    def handle(request):
+        seen_urls.append(str(request.url))
+        if "gemini-3.8-flash" in str(request.url):
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "FALLBACK_OK"}]}}]})
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(handle), **kwargs))
+    out = await GeminiService(api_key="test-fallback-key", model="gemini-3.8-flash").generate_content("Ping")
+    assert out == "FALLBACK_OK"
+    assert any("gemini-3.8-flash" in u for u in seen_urls)
+    assert any("gemini-2.5-flash" in u for u in seen_urls)
+
+
 def test_prepare_topic_requires_key_and_owner(context):
     client, store = context
     bundle = seed(client)

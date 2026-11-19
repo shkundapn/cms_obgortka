@@ -324,4 +324,24 @@ def test_browser_relayed_pairing_and_course_html_sync_when_server_blocked(monkey
     assert c.get("/api/assignments?refresh=true").status_code == 502
     assert c.get("/api/grades?refresh=true").status_code == 502
 
+    saved_assign = c.post(
+        "/api/assignments/from-browser",
+        json={
+            "course_id": 888,
+            "assignments": [
+                {"id": 901, "cmid": 301, "course_id": 888, "course_name": "Алгоритми", "name": "Дедлайн 1", "duedate": 1900000000}
+            ],
+        },
+    )
+    assert saved_assign.status_code == 200
+    assert saved_assign.json()["total"] == 1
+
+    from app.services.academic_cache import get_academic_cache
+    get_academic_cache()._entries.clear()
+
+    persisted_assign = c.get("/api/assignments?course_id=888")
+    assert persisted_assign.status_code == 200
+    assert persisted_assign.json()["total"] == 1
+    assert persisted_assign.json()["assignments"][0]["name"] == "Дедлайн 1"
+
 

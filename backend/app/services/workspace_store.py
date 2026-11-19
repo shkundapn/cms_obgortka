@@ -303,8 +303,88 @@ class WorkspaceStore:
             );
             CREATE INDEX IF NOT EXISTS idx_topic_mistakes_lookup
                 ON topic_mistakes (owner_id, course_id, topic_index, resolved);
+
+            CREATE TABLE IF NOT EXISTS cached_assignments (
+                site_url TEXT NOT NULL,
+                moodle_user_id INTEGER NOT NULL,
+                scope_key TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (site_url, moodle_user_id, scope_key)
+            );
             """
         )
+
+    def save_assignments(
+        self,
+        site_url: str,
+        moodle_user_id: int,
+        assignments: List[Dict[str, Any]],
+        course_id: Optional[int] = None,
+    ) -> None:
+        """Persist Moodle assignments in SQLite so deadlines survive restarts and upstream 403s."""
+        site = (site_url or "").rstrip("/")
+        uid = int(moodle_user_id or 0)
+        scope = str(int(course_id)) if course_id is not None else "all"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO cached_assignments(site_url, moodle_user_id, scope_key, payload_json, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(site_url, moodle_user_id, scope_key) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at""",
+                (site, uid, scope, json.dumps(assignments, ensure_ascii=False), now_iso),
+            )
+            if course_id is not None:
+                row = conn.execute(
+                    "SELECT payload_json FROM cached_assignments WHERE site_url = ? AND moodle_user_id = ? AND scope_key = 'all'",
+                    (site, uid),
+                ).fetchone()
+                if row:
+                    try:
+                        existing = json.loads(row["payload_json"])
+                        merged = [a for a in existing if int(a.get("course_id", 0)) != int(course_id)]
+                        merged.extend(assignments)
+                        conn.execute(
+                            "UPDATE cached_assignments SET payload_json = ?, updated_at = ? WHERE site_url = ? AND moodle_user_id = ? AND scope_key = 'all'",
+                            (json.dumps(merged, ensure_ascii=False), now_iso, site, uid),
+                        )
+                    except Exception:
+                        pass
+
+    def load_assignments(
+        self,
+        site_url: str,
+        moodle_user_id: int,
+        course_id: Optional[int] = None,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Load persisted Moodle assignments from SQLite when upstream is unreachable."""
+        site = (site_url or "").rstrip("/")
+        uid = int(moodle_user_id or 0)
+        scope = str(int(course_id)) if course_id is not None else "all"
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload_json FROM cached_assignments WHERE site_url = ? AND moodle_user_id = ? AND scope_key = ?",
+                (site, uid, scope),
+            ).fetchone()
+            if row:
+                try:
+                    return json.loads(row["payload_json"])
+                except Exception:
+                    return None
+            if course_id is not None:
+                all_row = conn.execute(
+                    "SELECT payload_json FROM cached_assignments WHERE site_url = ? AND moodle_user_id = ? AND scope_key = 'all'",
+                    (site, uid),
+                ).fetchone()
+                if all_row:
+                    try:
+                        items = json.loads(all_row["payload_json"])
+                        return [a for a in items if int(a.get("course_id", 0)) == int(course_id)]
+                    except Exception:
+                        return None
+        return None
 
     def _init_schema(self) -> None:
         with self._connect() as conn:

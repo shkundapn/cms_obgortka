@@ -38,7 +38,7 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
         } else if(message.type==='HUSTLE_MOODLE_SYNC_COURSE') {
           sendResponse(await syncCourseViaBrowser(target,portal,message.courseId,message.courseTitle,message.shortname));
         } else if(message.type==='HUSTLE_MOODLE_ASSIGNMENTS') {
-          sendResponse(await fetchAssignmentsViaBrowser(target,message.courseId||null));
+          sendResponse(await fetchAssignmentsViaBrowser(target,portal,message.courseId||null));
         } else if(message.type==='HUSTLE_MOODLE_GRADES') {
           sendResponse(await fetchGradesViaBrowser(target,portal,message.courseId||null));
         } else {

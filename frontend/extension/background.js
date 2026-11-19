@@ -500,7 +500,7 @@ async function callMoodleAjax(moodleOrigin, sesskey, methodname, args) {
   return null;
 }
 
-async function fetchAssignmentsViaBrowser(moodleOrigin, courseId = null) {
+async function fetchAssignmentsViaBrowser(moodleOrigin, portalUrl = null, courseId = null) {
   const ctx = await getMoodleContext(moodleOrigin);
   if (!ctx.ok) return { success: false, status: ctx.status, needsLogin: ctx.needsLogin, error: ctx.error };
 
@@ -579,6 +579,23 @@ async function fetchAssignmentsViaBrowser(moodleOrigin, courseId = null) {
       modulename: modname,
     };
   });
+
+  if (portalUrl) {
+    try {
+      const saveRes = await fetch(`${portalUrl}/api/assignments/from-browser`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ course_id: courseId ? Number(courseId) : null, assignments }),
+      });
+      if (saveRes.ok) {
+        const saved = await saveRes.json().catch(() => null);
+        if (saved && Array.isArray(saved.assignments)) {
+          return { success: true, total: saved.total ?? saved.assignments.length, assignments: saved.assignments };
+        }
+      }
+    } catch {}
+  }
 
   return { success: true, total: assignments.length, assignments };
 }

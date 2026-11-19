@@ -3,14 +3,27 @@ import asyncio
 from datetime import datetime, timezone
 import json
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from app.core.security import WorkspaceOwner, get_workspace_owner
 from app.models.mix import RawTopicSnapshot
 from app.services.academic_cache import schedule_background_task
+from app.services.anki_service import (
+    create_custom_anki_card,
+    get_anki_session,
+    review_anki_card,
+    save_anki_settings,
+    set_card_learned,
+)
 from app.services.course_structure import build_course_map
+from app.services.learning_progress_service import (
+    evaluate_module_tutor,
+    get_course_learning_progress,
+    record_module_quiz_submission,
+    record_video_concept_watch,
+)
 from app.services.learning_provider import LearningProviderError, LearningSettingsStore, learning_provider_scope, validate_gemini_key
 from app.services.mix_generator import split_text_into_semantic_chunks
 from app.services.oral_defense_service import MAX_AUDIO_BYTES, evaluate_oral_answer, generate_oral_question, last_oral_attempt
@@ -414,3 +427,243 @@ async def latest_oral_defense(course_id: OralCourse, topic_index: int, response:
     private_response(response)
     return {"attempt": last_oral_attempt(get_workspace_store().db_path, owner.owner_id,
                                          oral_course_id(course_id), topic_index, node_id)}
+
+
+class VideoWatchRequest(BaseModel):
+    concept_id: str
+    concept_title: str = ""
+    youtube_url: str = ""
+
+
+class ModuleQuizSubmitRequest(BaseModel):
+    answers: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+@router.get("/courses/{course_id}/learning-progress")
+async def course_learning_progress(
+    course_id: int,
+    response: Response,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+):
+    private_response(response)
+    return get_course_learning_progress(get_workspace_store(), owner.owner_id, course_id)
+
+
+@router.post("/courses/{course_id}/topics/{topic_index}/modules/{module_id}/video-watch")
+async def module_video_watch(
+    course_id: int,
+    topic_index: int,
+    module_id: str,
+    req: VideoWatchRequest,
+    request: Request,
+    response: Response,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+):
+    same_origin(request)
+    private_response(response)
+    return record_video_concept_watch(
+        store=get_workspace_store(),
+        owner_id=owner.owner_id,
+        course_id=course_id,
+        topic_index=topic_index,
+        module_id=module_id,
+        concept_id=req.concept_id,
+        concept_title=req.concept_title,
+        youtube_url=req.youtube_url,
+    )
+
+
+@router.post("/courses/{course_id}/topics/{topic_index}/modules/{module_id}/quiz-submit")
+async def module_quiz_submit(
+    course_id: int,
+    topic_index: int,
+    module_id: str,
+    req: ModuleQuizSubmitRequest,
+    request: Request,
+    response: Response,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+):
+    same_origin(request)
+    private_response(response)
+    return record_module_quiz_submission(
+        store=get_workspace_store(),
+        owner_id=owner.owner_id,
+        course_id=course_id,
+        topic_index=topic_index,
+        module_id=module_id,
+        answers=req.answers,
+    )
+
+
+@router.post("/courses/{course_id}/topics/{topic_index}/modules/{module_id}/tutor-check")
+async def module_tutor_check(
+    course_id: int,
+    topic_index: int,
+    module_id: str,
+    request: Request,
+    response: Response,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+):
+    same_origin(request)
+    private_response(response)
+    store = get_workspace_store()
+    provider = LearningSettingsStore(store.db_path).get(owner.owner_id)
+    if not provider:
+        raise LearningProviderError("Підключи Gemini API key, щоб AI-тютор перевірив відповідь.", 424)
+
+    answer_text = ""
+    audio_bytes: Optional[bytes] = None
+    audio_mime: Optional[str] = None
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        answer_text = str(form.get("answer_text") or "")
+        audio_file = form.get("audio")
+        if audio_file is not None and hasattr(audio_file, "read"):
+            audio_bytes = await audio_file.read(MAX_AUDIO_BYTES + 1)
+            if len(audio_bytes) > MAX_AUDIO_BYTES:
+                raise HTTPException(413, "Аудіозапис завеликий (максимум 15 МБ).")
+            audio_mime = getattr(audio_file, "content_type", None)
+    else:
+        try:
+            body = await request.json()
+            answer_text = str((body or {}).get("answer_text") or "")
+        except Exception:
+            answer_text = ""
+
+    with learning_provider_scope(provider):
+        return await evaluate_module_tutor(
+            store=store,
+            owner_id=owner.owner_id,
+            course_id=course_id,
+            topic_index=topic_index,
+            module_id=module_id,
+            answer_text=answer_text,
+            audio_bytes=audio_bytes,
+            audio_mime=audio_mime,
+        )
+
+
+class AnkiSettingsUpdateRequest(BaseModel):
+    daily_limit: int = Field(default=20, ge=1, le=100)
+    course_ids: List[int] = Field(default_factory=list)
+    include_learned: bool = True
+    include_new: bool = True
+    again_minutes: int = Field(default=10, ge=1, le=1440)
+    hard_minutes: int = Field(default=720, ge=5, le=2880)
+    good_days: float = Field(default=1.0, ge=0.1, le=60.0)
+    easy_days: float = Field(default=4.0, ge=0.5, le=120.0)
+    interval_multiplier: float = Field(default=1.0, ge=0.25, le=3.0)
+
+
+class AnkiReviewRequest(BaseModel):
+    card_key: str = Field(min_length=1, max_length=200)
+    rating: Literal["again", "hard", "good", "easy"]
+
+
+class AnkiLearnedRequest(BaseModel):
+    learned: bool = True
+    card_key: Optional[str] = Field(default=None, max_length=200)
+    course_id: int = 0
+    topic_index: int = 0
+    course_title: str = Field(default="", max_length=200)
+    topic_title: str = Field(default="", max_length=200)
+    front: str = Field(default="", max_length=2000)
+    back: str = Field(default="", max_length=4000)
+    source_citation: Optional[str] = Field(default=None, max_length=400)
+
+
+class AnkiCustomCardRequest(BaseModel):
+    front: str = Field(min_length=1, max_length=2000)
+    back: str = Field(min_length=1, max_length=4000)
+    course_id: int = 0
+    course_title: str = Field(default="", max_length=200)
+    topic_title: str = Field(default="", max_length=200)
+    is_learned: bool = True
+
+
+@router.get("/anki/session")
+async def anki_session(
+    response: Response,
+    practice_all: bool = False,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+):
+    private_response(response)
+    return get_anki_session(get_workspace_store(), owner.owner_id, practice_all=practice_all)
+
+
+@router.put("/anki/settings")
+async def update_anki_settings(
+    req: AnkiSettingsUpdateRequest,
+    request: Request,
+    response: Response,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+):
+    same_origin(request)
+    private_response(response)
+    store = get_workspace_store()
+    save_anki_settings(store, owner.owner_id, req.model_dump())
+    return get_anki_session(store, owner.owner_id)
+
+
+@router.post("/anki/cards/review")
+async def submit_anki_review(
+    req: AnkiReviewRequest,
+    request: Request,
+    response: Response,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+):
+    same_origin(request)
+    private_response(response)
+    return review_anki_card(get_workspace_store(), owner.owner_id, req.card_key, req.rating)
+
+
+@router.post("/anki/cards/learned")
+async def toggle_anki_learned(
+    req: AnkiLearnedRequest,
+    request: Request,
+    response: Response,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+):
+    same_origin(request)
+    private_response(response)
+    store = get_workspace_store()
+    res = set_card_learned(
+        store,
+        owner.owner_id,
+        learned=req.learned,
+        card_key=req.card_key,
+        course_id=req.course_id,
+        topic_index=req.topic_index,
+        course_title=req.course_title,
+        topic_title=req.topic_title,
+        front=req.front,
+        back=req.back,
+        source_citation=req.source_citation,
+    )
+    res["session"] = get_anki_session(store, owner.owner_id)
+    return res
+
+
+@router.post("/anki/cards")
+async def add_custom_anki_card(
+    req: AnkiCustomCardRequest,
+    request: Request,
+    response: Response,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+):
+    same_origin(request)
+    private_response(response)
+    store = get_workspace_store()
+    res = create_custom_anki_card(
+        store,
+        owner.owner_id,
+        front=req.front,
+        back=req.back,
+        course_id=req.course_id,
+        course_title=req.course_title,
+        topic_title=req.topic_title,
+        is_learned=req.is_learned,
+    )
+    res["session"] = get_anki_session(store, owner.owner_id)
+    return res

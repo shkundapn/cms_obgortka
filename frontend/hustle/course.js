@@ -8,7 +8,7 @@
   function showDialog(title,content) {body.innerHTML=`<h2 id="dialog-title">${esc(title)}</h2>${content}<p role="alert" class="field-error" data-course-error></p>`;if(!dialog.open)dialog.showModal();}
   function controls(value) {return tools.map(([key,label])=>`<label class="tool-choice"><input type="checkbox" name="${key}" ${value[key]?'checked':''}><span>${label}</span></label>`).join('');}
   function manage(value) {
-    return `<div class="manage-grid"><section class="topic-card"><h2>Інструменти курсу</h2><form id="course-tools"><div class="tool-grid">${controls(value.tools_config)}</div><button class="primary" type="submit">Зберегти</button><p role="status" data-tools-status></p></form></section><section class="topic-card"><h2>Матеріали й структура</h2><div class="manage-actions"><button class="secondary" data-structure>Впорядкувати за темами ${icon('arrow')}</button>${value.course.source_type!=='manual_upload'?'<button class="secondary" data-sync-course>Оновити з Moodle ↻</button><button class="text-button" data-check-updates>Перевірити зміни</button>':''}<button class="secondary" data-regenerate>Оновити конспекти ↻</button><button class="text-button" data-clear-course-generated>Очистити згенероване</button></div><p role="status" data-course-action-status></p><div data-jobs></div></section></div>${value.blocked_quizzes.length?`<details class="source-tree"><summary>Недоступні для опрацювання · ${value.blocked_quizzes.length}</summary><ul>${value.blocked_quizzes.map(q=>`<li>${esc(q.name)}</li>`).join('')}</ul></details>`:''}`;
+    return `<div class="manage-grid"><section class="topic-card"><h2>Інструменти курсу</h2><form id="course-tools"><div class="tool-grid">${controls(value.tools_config)}</div><button class="primary" type="submit">Зберегти</button><p role="status" data-tools-status></p></form></section><section class="topic-card"><h2>Матеріали й структура</h2><div class="manage-actions"><button class="secondary" data-structure>Впорядкувати за темами ${icon('arrow')}</button>${value.course.source_type!=='manual_upload'?'<button class="secondary" data-sync-course>Оновити з Moodle ↻</button><button class="text-button" data-check-updates>Перевірити зміни</button>':''}<button class="secondary" data-regenerate>Оновити конспекти ↻</button><button class="text-button" data-clear-course-generated>Очистити згенероване</button><button class="text-button danger-button" data-reset-course>Скинути весь курс</button></div><p role="status" data-course-action-status></p><div data-jobs></div></section></div>${value.blocked_quizzes.length?`<details class="source-tree"><summary>Недоступні для опрацювання · ${value.blocked_quizzes.length}</summary><ul>${value.blocked_quizzes.map(q=>`<li>${esc(q.name)}</li>`).join('')}</ul></details>`:''}`;
   }
   async function jobs(target,epoch) {
     try {const result=await UI.api(`/api/workspace/courses/${bundle.course.course_id}/jobs`);if(epoch!==version||!target.isConnected)return;
@@ -50,9 +50,74 @@
       target.innerHTML=list.filter(e=>e.type!=='system.connected').slice().reverse().slice(0,12).map(e=>`<div class="event-row"><span>${esc(types[e.type]||e.title)}</span><small>${esc(UI.date(e.timestamp,true))}</small>${e.data?.course_id?`<a class="text-button" href="#course/${Number(e.data.course_id)}">До курсу →</a>`:''}</div>`).join('')||'<p class="muted">Оновлень поки немає.</p>';
     }catch(err){if(target.isConnected)target.textContent=err.message;}
   }
+  function clearCourseReadingState(courseId) {
+    const ownerId = account?.owner_id;
+    if (!ownerId) return;
+    try {
+      const key = 'hustle:course-reading:' + ownerId;
+      const saved = JSON.parse(sessionStorage.getItem(key) || '{}');
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+        delete saved[courseId];
+        sessionStorage.setItem(key, JSON.stringify(saved));
+      }
+    } catch {}
+  }
   async function structure() {
     showDialog('Структура матеріалів',`<form class="import-form" id="structure-request"><label>Цільовий бал<input type="number" min="1" max="100" name="target" value="${bundle.organization?.target_score||85}" required></label><details class="source-tree"><summary>Власний силабус</summary><label>Теми й зміст курсу<textarea name="syllabus"></textarea></label></details><button class="primary" type="submit">Переглянути структуру →</button></form>`);
   }
+  function resetCourseModal() {
+    const canResync = bundle.course.source_type !== 'manual_upload' && account?.moodle_paired;
+    showDialog(
+      'Скинути весь курс',
+      `<p>Буде повністю очищено всі дані курсу <strong>${esc(bundle.course.title)}</strong>: згенеровані конспекти, нотатки, картки, тести, усний захист, історію практики, структуру й локальні файли.</p>
+      <div class="reset-course-actions">
+        ${canResync
+          ? '<button type="button" class="primary" data-reset-action="resync">Скинути й завантажити заново ↻</button><button type="button" class="secondary danger-button" data-reset-action="delete">Видалити курс із простору</button>'
+          : '<button type="button" class="primary danger-button" data-reset-action="delete">Скинути й видалити курс</button>'}
+        <button type="button" class="text-button" data-reset-cancel>Скасувати</button>
+      </div>`
+    );
+  }
+  body.addEventListener('click', async event => {
+    if (event.target.closest('[data-reset-cancel]')) { dialog.close(); return; }
+    const btn = event.target.closest('[data-reset-action]');
+    if (!btn) return;
+    const mode = btn.dataset.resetAction;
+    const id = bundle.course.course_id;
+    const epoch = modalVersion;
+    const buttons = [...body.querySelectorAll('[data-reset-action],[data-reset-cancel]')];
+    const error = body.querySelector('[data-course-error]');
+    buttons.forEach(el => { el.disabled = true; });
+    error.textContent = '';
+    const originalText = btn.textContent;
+    btn.textContent = mode === 'resync' ? 'Скидаємо й оновлюємо…' : 'Видаляємо курс…';
+    try {
+      if (mode === 'resync') {
+        const res = await UI.post(`/api/workspace/courses/${id}/reset`, {});
+        if (!dialog.open || modalVersion !== epoch) return;
+        clearCourseReadingState(id);
+        dialog.close();
+        UI.toast(res.message || 'Курс повністю скинуто й завантажено заново');
+        if (res.deleted) {
+          location.hash = 'courses';
+        } else {
+          const url = UI.courseLink(id, 'overview');
+          if (location.hash === url) emit(); else location.hash = url;
+        }
+      } else {
+        await UI.api(`/api/workspace/courses/${id}`, { method: 'DELETE' });
+        if (!dialog.open || modalVersion !== epoch) return;
+        clearCourseReadingState(id);
+        dialog.close();
+        UI.toast('Курс повністю скинуто й видалено');
+        location.hash = 'courses';
+      }
+    } catch (err) {
+      error.textContent = err.message;
+      btn.textContent = originalText;
+      buttons.forEach(el => { el.disabled = false; });
+    }
+  });
   body.addEventListener('submit',async event=>{
     if(event.target.id!=='structure-request'&&event.target.id!=='structure-confirm')return;event.preventDefault();const form=event.target, button=form.querySelector('[type=submit]'),error=body.querySelector('[data-course-error]');button.disabled=true;error.textContent='';
     const epoch=modalVersion;
@@ -63,8 +128,9 @@
         preview=await UI.post('/api/workspace/courses/preview-structure',payload);
         if(!dialog.open||modalVersion!==epoch)return;
         if(!preview.topics?.length)throw new Error('Не вдалося визначити теми. Додай силабус.');
-        showDialog('Структура матеріалів',`<form id="structure-confirm" class="import-form"><ol class="structure-preview">${preview.topics.map((t,i)=>`<li><label>Тема ${i+1}<input data-topic-title="${i}" value="${esc(t.title)}" required maxlength="220"></label><p>${esc(t.summary)}</p>${t.key_concepts?.length?`<div class="concept-tags">${t.key_concepts.map(c=>`<span>${esc(c)}</span>`).join('')}</div>`:''}</li>`).join('')}</ol><button class="primary" type="submit">Застосувати структуру →</button></form>`);
+        showDialog('Структура матеріалів',`<form id="structure-confirm" class="import-form"><ol class="structure-preview">${preview.topics.map((t,i)=>{const count=t.material_ids?.length||t.source_modules_count||0;return `<li><label>Тема ${i+1}${count?` · ${UI.countLabel(count,'матеріал','матеріали','матеріалів')}`:''}<input data-topic-title="${i}" value="${esc(t.title)}" required maxlength="220"></label><p>${esc(t.summary)}</p>${t.key_concepts?.length?`<div class="concept-tags">${t.key_concepts.map(c=>`<span>${esc(c)}</span>`).join('')}</div>`:''}</li>`;}).join('')}</ol><button class="primary" type="submit">Застосувати структуру →</button></form>`);
       } else {
+        button.textContent='Застосовуємо…';
         const topics=preview.topics.map((t,i)=>({...t,title:form.querySelector(`[data-topic-title="${i}"]`).value.trim()}));
         await UI.post('/api/workspace/courses/confirm-structure',{...preview,topics});dialog.close();UI.toast('Матеріали впорядковано');const url=UI.courseLink(bundle.course.course_id,'materials');if(location.hash===url)emit();else location.hash=url;
       }
@@ -76,7 +142,8 @@
     try {await UI.api(`/api/workspace/courses/${bundle.course.course_id}/tools`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});UI.toast('Інструменти збережено');emit();}catch(err){status.textContent=err.message;}finally{button.disabled=false;}
   });
   main.addEventListener('click',async event=>{
-    if(event.target.closest('[data-structure]'))structure();
+    if(event.target.closest('[data-structure]')){structure();return;}
+    if(event.target.closest('[data-reset-course]')){resetCourseModal();return;}
     const action=event.target.closest('[data-sync-course],[data-check-updates],[data-regenerate],[data-ack-topic],[data-clear-course-generated]');if(!action)return;
     const status=main.querySelector('[data-course-action-status]')||action.parentElement.querySelector('[role=status]');action.disabled=true;if(status)status.textContent=action.hasAttribute('data-clear-course-generated')?'Очищуємо згенероване…':'Оновлюємо…';
     try {

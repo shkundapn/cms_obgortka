@@ -51,7 +51,7 @@
   function render(courses,buttons) {
     HustleSpace.setCourses(courses);
     return `<div class="today-dashboard"><header class="today-heading"><h1>Сьогодні</h1><time datetime="${dayKey(Date.now())}">${esc(format(Date.now(),{weekday:'long',day:'numeric',month:'long'}))}</time></header>
-      ${courses.length?`<div class="today-grid"><div class="today-main-column"><div data-today-focus><section class="today-focus today-loading" aria-busy="true"><p role="status">Завантажуємо завдання…</p><span class="today-skeleton" aria-hidden="true"></span><span class="today-skeleton short" aria-hidden="true"></span></section></div><section class="today-queue" data-today-queue hidden></section></div><aside class="today-study" data-today-study aria-label="Навчання"><span class="today-study-icon" aria-hidden="true">${icon('bookmark')}</span><h2>До навчання</h2><p role="status">Завантажуємо тему…</p></aside></div><div class="today-review" data-today-review></div>`:
+      ${courses.length?`<div class="today-grid"><div class="today-main-column"><div data-today-focus><section class="today-focus today-loading" aria-busy="true"><p role="status">Завантажуємо завдання…</p><span class="today-skeleton" aria-hidden="true"></span><span class="today-skeleton short" aria-hidden="true"></span></section></div><section class="today-queue" data-today-queue hidden></section></div><aside class="today-study" data-today-study aria-label="Навчання"><span class="today-study-icon" aria-hidden="true">${icon('bookmark')}</span><h2>До навчання</h2><p role="status">Завантажуємо тему…</p></aside></div><section class="today-anki" data-today-anki aria-label="Картки інтервального повторення Anki"></section><div class="today-review" data-today-review></div>`:
       `<section class="today-focus today-onboarding"><span class="today-empty-icon" aria-hidden="true">${icon('courses')}</span><h2>Додай перший курс</h2><div class="page-actions">${buttons}</div></section>`}
     </div>`;
   }
@@ -170,6 +170,7 @@
     if(root.dataset.view!=='dashboard'||!courses.length)return;
     const state={root,account,courses,items:[],focus:null,bundles:new Map(),loadedBundles:new Map(),loadTurn:0,studyTurn:0};active=state;
     loadStudy(state);
+    window.HustleAnki?.mount?.(root);
     if(account.moodle_paired)load(state);else draw(state);
     root.querySelector('.today-dashboard').addEventListener('click',event=>{if(event.target.closest('[data-today-retry]'))load(state);});
     root.querySelector('.today-dashboard').addEventListener('change',event=>{

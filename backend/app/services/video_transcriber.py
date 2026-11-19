@@ -1,7 +1,10 @@
+import html as _html
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
+import httpx
 
 logger = logging.getLogger("video_transcriber")
 
@@ -74,6 +77,102 @@ class VideoTranscriberService:
                     break
         return urls
 
+    @staticmethod
+    def format_timestamp(seconds: float) -> str:
+        total = max(0, int(seconds or 0))
+        m, s = divmod(total, 60)
+        h, m = divmod(m, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+    @classmethod
+    def _fetch_youtube_captions_http(
+        cls,
+        video_id: str,
+        preferred_languages: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Direct HTTP watch-page captionTracks extractor fallback when youtube-transcript-api fails."""
+        languages = preferred_languages or ["uk", "en", "pl", "de", "fr", "es", "ru"]
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Accept-Language": "uk,en-US;q=0.9,en;q=0.8",
+        }
+        try:
+            with httpx.Client(timeout=15.0, follow_redirects=True, headers=headers) as client:
+                watch_resp = client.get(f"https://www.youtube.com/watch?v={video_id}")
+                if watch_resp.status_code != 200:
+                    return None
+                page = watch_resp.text
+                match = re.search(r'"captionTracks"\s*:\s*(\[.*?\])', page)
+                if not match:
+                    return None
+                tracks = json.loads(match.group(1))
+                if not isinstance(tracks, list) or not tracks:
+                    return None
+
+                def track_rank(tr: Dict[str, Any]) -> tuple:
+                    code = (tr.get("languageCode") or "").lower()
+                    is_asr = tr.get("kind") == "asr"
+                    lang_idx = next((i for i, p in enumerate(languages) if code.startswith(p.lower())), len(languages) + 1)
+                    return (lang_idx, 1 if is_asr else 0, code)
+
+                best = min(tracks, key=track_rank)
+                base_url = best.get("baseUrl")
+                if not base_url:
+                    return None
+
+                # Prefer json3 lossless timed events; fallback to raw XML
+                sep = "&" if "?" in base_url else "?"
+                cap_resp = client.get(f"{base_url}{sep}fmt=json3")
+                segments: List[Dict[str, Any]] = []
+                full_parts: List[str] = []
+
+                if cap_resp.status_code == 200 and cap_resp.text.strip().startswith("{"):
+                    payload = cap_resp.json()
+                    for ev in payload.get("events", []):
+                        segs = ev.get("segs") or []
+                        txt = _html.unescape("".join(s.get("utf8", "") for s in segs)).replace("\n", " ").strip()
+                        if not txt:
+                            continue
+                        start_sec = float(ev.get("tStartMs", 0)) / 1000.0
+                        dur_sec = float(ev.get("dDurationMs", 0)) / 1000.0
+                        segments.append({
+                            "timestamp": cls.format_timestamp(start_sec),
+                            "start_seconds": start_sec,
+                            "duration": dur_sec,
+                            "text": txt,
+                        })
+                        full_parts.append(txt)
+                else:
+                    xml_resp = client.get(base_url)
+                    if xml_resp.status_code == 200:
+                        for m in re.finditer(r'<text[^>]*start="([^"]+)"[^>]*>(.*?)</text>', xml_resp.text, flags=re.DOTALL):
+                            start_sec = float(m.group(1) or 0.0)
+                            txt = _html.unescape(re.sub(r"<[^>]+>", " ", m.group(2))).replace("\n", " ").strip()
+                            if not txt:
+                                continue
+                            segments.append({
+                                "timestamp": cls.format_timestamp(start_sec),
+                                "start_seconds": start_sec,
+                                "text": txt,
+                            })
+                            full_parts.append(txt)
+
+                if not segments:
+                    return None
+
+                return {
+                    "source": "youtube_captions",
+                    "video_id": video_id,
+                    "language": best.get("languageCode") or "uk",
+                    "is_generated": best.get("kind") == "asr",
+                    "full_text": " ".join(full_parts),
+                    "segments": segments,
+                    "token_cost": 0,
+                }
+        except Exception as exc:
+            logger.debug("Direct HTTP caption fallback failed for %s: %s", video_id, exc)
+            return None
+
     @classmethod
     def get_youtube_transcript(
         cls,
@@ -81,70 +180,123 @@ class VideoTranscriberService:
         preferred_languages: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Fetch YouTube transcript directly using YouTube's timedtext API.
-        Cost: 0 tokens!
+        Fetch full lossless YouTube transcript with timestamps (0 tokens).
+        Uses youtube_transcript_api first (manual > auto) and falls back to watch-page timedtext JSON3/XML.
         """
         video_id = cls.extract_youtube_video_id(url)
         if not video_id:
             return None
 
-        if not YOUTUBE_TRANSCRIPT_AVAILABLE or YouTubeTranscriptApi is None:
-            logger.warning("youtube_transcript_api is not installed.")
-            return None
+        languages = preferred_languages or ["uk", "en", "pl", "de", "fr", "es", "ru"]
 
-        languages = preferred_languages or ["uk", "en", "ru", "de", "fr", "es"]
-
-        try:
-            # 1. Try preferred languages directly
-            # In youtube-transcript-api, get_transcript accepts languages list
-            transcript_list = YouTubeTranscriptApi().list(video_id)
-            
-            # Find best transcript
-            transcript = None
+        if YOUTUBE_TRANSCRIPT_AVAILABLE and YouTubeTranscriptApi is not None:
             try:
-                # Try finding manually created or generated transcript matching preferred languages
-                transcript = transcript_list.find_transcript(languages)
-            except Exception:
-                # Fallback to any available transcript
-                for t in transcript_list:
-                    transcript = t
-                    break
+                transcript_list = YouTubeTranscriptApi().list(video_id)
+                transcript = None
+                try:
+                    transcript = transcript_list.find_manually_created_transcript(languages)
+                except Exception:
+                    try:
+                        transcript = transcript_list.find_transcript(languages)
+                    except Exception:
+                        for t in transcript_list:
+                            transcript = t
+                            break
 
-            if transcript:
-                fetched = transcript.fetch()
-                # Format full text and snippets with timestamps
-                full_text_parts = []
-                segments = []
-                for entry in fetched:
-                    # Entry has 'text', 'start', 'duration'
-                    text_line = (entry.get("text", "") if isinstance(entry, dict) else entry.text).strip()
-                    start_sec = entry.get("start", 0.0) if isinstance(entry, dict) else entry.start
-                    if text_line:
-                        full_text_parts.append(text_line)
-                        m, s = divmod(int(start_sec), 60)
-                        h, m = divmod(m, 60)
-                        ts_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-                        segments.append({
-                            "timestamp": ts_str,
-                            "start_seconds": start_sec,
-                            "text": text_line,
-                        })
+                if transcript:
+                    fetched = transcript.fetch()
+                    full_text_parts = []
+                    segments = []
+                    for entry in fetched:
+                        raw_txt = entry.get("text", "") if isinstance(entry, dict) else entry.text
+                        text_line = _html.unescape(str(raw_txt or "")).replace("\n", " ").strip()
+                        start_sec = float(entry.get("start", 0.0) if isinstance(entry, dict) else entry.start)
+                        dur_sec = float(entry.get("duration", 0.0) if isinstance(entry, dict) else getattr(entry, "duration", 0.0))
+                        if text_line:
+                            full_text_parts.append(text_line)
+                            segments.append({
+                                "timestamp": cls.format_timestamp(start_sec),
+                                "start_seconds": start_sec,
+                                "duration": dur_sec,
+                                "text": text_line,
+                            })
 
-                full_text = " ".join(full_text_parts)
-                return {
-                    "source": "youtube_captions",
-                    "video_id": video_id,
-                    "language": transcript.language_code,
-                    "is_generated": transcript.is_generated,
-                    "full_text": full_text,
-                    "segments": segments,
-                    "token_cost": 0,
-                }
-        except Exception as exc:
-            logger.info(f"Could not retrieve YouTube transcript for {video_id}: {exc}")
-            return None
+                    if segments:
+                        return {
+                            "source": "youtube_captions",
+                            "video_id": video_id,
+                            "language": transcript.language_code,
+                            "is_generated": transcript.is_generated,
+                            "full_text": " ".join(full_text_parts),
+                            "segments": segments,
+                            "token_cost": 0,
+                        }
+            except Exception as exc:
+                logger.info(f"YouTubeTranscriptApi fallback for {video_id}: {exc}")
 
-        return None
+        return cls._fetch_youtube_captions_http(video_id, preferred_languages=languages)
+
+    @classmethod
+    def format_timestamped_transcript(cls, segments: List[Dict[str, Any]], max_chars: int = 45000) -> str:
+        """Render segments into clean timestamped blocks [MM:SS] ... without losing chronological context."""
+        if not segments:
+            return ""
+        lines: List[str] = []
+        bucket_start: Optional[float] = None
+        bucket_words: List[str] = []
+
+        for seg in segments:
+            txt = (seg.get("text") or "").strip()
+            if not txt:
+                continue
+            start_s = float(seg.get("start_seconds") or 0.0)
+            if bucket_start is not None and (start_s - bucket_start >= 25.0 or sum(len(w) for w in bucket_words) >= 350):
+                lines.append(f"[{cls.format_timestamp(bucket_start)}] {' '.join(bucket_words)}")
+                bucket_start = None
+                bucket_words = []
+            if bucket_start is None:
+                bucket_start = start_s
+            bucket_words.append(txt)
+
+        if bucket_start is not None and bucket_words:
+            lines.append(f"[{cls.format_timestamp(bucket_start)}] {' '.join(bucket_words)}")
+
+        joined = "\n".join(lines)
+        return joined[:max_chars]
+
+    @classmethod
+    def group_segments_into_concepts(
+        cls,
+        segments: List[Dict[str, Any]],
+        video_id: str,
+        target_chunks: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """Deterministic timestamped concept grouping fallback when AI structuring isn't run."""
+        if not segments or not video_id:
+            return []
+        step = max(1, len(segments) // max(1, target_chunks))
+        concepts: List[Dict[str, Any]] = []
+        for idx in range(0, len(segments), step):
+            chunk = segments[idx: idx + step]
+            if not chunk:
+                continue
+            start_s = int(float(chunk[0].get("start_seconds") or 0))
+            end_s = int(float(chunk[-1].get("start_seconds") or start_s) + 15)
+            tc = cls.format_timestamp(start_s)
+            snippet = " ".join((c.get("text") or "").strip() for c in chunk[:6]).strip()
+            concepts.append({
+                "id": f"yt-{video_id}-{start_s}",
+                "concept_title": f"Фрагмент лекції ({tc})",
+                "timecode": tc,
+                "start_seconds": start_s,
+                "end_seconds": end_s,
+                "youtube_url": f"https://www.youtube.com/watch?v={video_id}&t={start_s}s",
+                "summary": snippet[:280],
+                "explanation_markdown": " ".join((c.get("text") or "").strip() for c in chunk),
+            })
+            if len(concepts) >= target_chunks + 2:
+                break
+        return concepts
 
     @staticmethod
     def parse_vtt_or_srt(sub_text: str) -> Dict[str, Any]:

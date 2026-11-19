@@ -83,6 +83,9 @@ button:disabled { cursor: not-allowed; opacity: .6; }
 .manage-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 1.25rem; }
 .manage-grid h2,.settings-events h2 { font-size: 1.15rem; margin: 0 0 1.25rem; }
 .manage-actions { display: flex; flex-direction: column; align-items: stretch; gap: .75rem; }
+.danger-button { color: #973d34; }
+.danger-button:hover { background: #f8e5e2; }
+.reset-course-actions { display: flex; flex-direction: column; gap: .75rem; margin-top: 1.25rem; }
 .tool-grid { display: grid; gap: .85rem; margin-bottom: 1.5rem; }.tool-choice { display: flex; gap: .7rem; align-items: center; font-size: .9rem; cursor: pointer; }
 input[type=checkbox] { width: 1.1rem; height: 1.1rem; accent-color: var(--plum); flex-shrink: 0; }
 .source-tree { margin-top: 1.4rem; padding: 1rem; border: 1px solid #dfd3d8; border-radius: .8rem; font-size: .85rem; }

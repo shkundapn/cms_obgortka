@@ -218,3 +218,93 @@ def test_html_only_moodle_resources_can_be_listed_and_archived(context, tmp_path
     result = asyncio.run(moodle.pull_all_course_files(token='fake_cookie', course_id=612, auth_type='cookie', target_dir=str(tmp_path/'downloads')))
     assert result['total_downloaded'] == 1
     assert (tmp_path/'downloads/15_lecture.txt').read_text() == 'BFS uses a queue'
+
+
+def test_preview_structure_populates_material_ids_normalizes_indices_and_works_for_manual_courses(context, monkeypatch):
+    from app.services.gemini_service import GeminiService
+    client, _ = context
+    payload = source_payload()
+    payload['sections'][0]['modules'].append({'module_id': 199, 'name': 'Заголовок блоку', 'modname': 'label'})
+    assert client.post('/api/sync/extension', json=payload).status_code == 200
+
+    async def fake_syllabus(self, **kwargs):
+        return [
+            {'topic_index': 1, 'title': 'Обхід графів', 'summary': 'BFS та DFS', 'key_concepts': ['BFS'], 'keywords': ['обхід', 'графа', 'черга']},
+            {'topic_index': 1, 'title': 'Дерева пошуку', 'summary': 'Бінарні дерева', 'key_concepts': ['BST'], 'keywords': ['бінарні', 'дерева']},
+        ]
+
+    monkeypatch.setattr(GeminiService, 'is_available', property(lambda self: True))
+    monkeypatch.setattr(GeminiService, 'structure_syllabus_to_topics', fake_syllabus)
+    prev = client.post('/api/workspace/courses/preview-structure', json={'course_id': 612})
+    assert prev.status_code == 200
+    topics = prev.json()['topics']
+    assert [t['topic_index'] for t in topics] == [1, 2]
+    all_mat_ids = [mid for t in topics for mid in t['material_ids']]
+    assert 101 in all_mat_ids and 102 in all_mat_ids
+    assert 199 not in all_mat_ids and 111 not in all_mat_ids
+
+    conf = client.post('/api/workspace/courses/confirm-structure', json={**prev.json(), 'topics': topics})
+    assert conf.status_code == 200
+    bundle = client.get('/api/workspace/courses/612').json()
+    grouped_ids = [m['id'] for g in bundle['material_groups'] for m in g['materials']]
+    assert 101 in grouped_ids and 102 in grouped_ids and 199 not in grouped_ids
+
+    # Manual-upload courses with snapshots also support preview-structure without custom syllabus text.
+    monkeypatch.setattr(GeminiService, 'is_available', property(lambda self: False))
+    created = client.post('/api/workspace/courses/create-text', json={
+        'title': 'Математичний аналіз',
+        'topic_title': 'Границі функцій',
+        'content_text': 'Границя функції описує поведінку поблизу точки.',
+    }).json()
+    manual_prev = client.post('/api/workspace/courses/preview-structure', json={'course_id': created['course_id']})
+    assert manual_prev.status_code == 200
+    assert manual_prev.json()['topics']
+
+
+def test_reset_whole_course_wipes_all_course_state_and_resyncs_moodle_when_paired(context, monkeypatch):
+    from app.services.moodle_client import MoodleClient
+    client, _ = context
+
+    # Without Moodle session, reset wipes all state and deletes manual course cleanly.
+    manual = client.post('/api/workspace/courses/create-text', json={
+        'title': 'Ручний курс',
+        'content_text': 'Тестовий матеріал для повного скидання курсу.',
+    }).json()
+    res_manual = client.post(f"/api/workspace/courses/{manual['course_id']}/reset")
+    assert res_manual.status_code == 200
+    assert res_manual.json()['deleted'] is True
+    assert client.get(f"/api/workspace/courses/{manual['course_id']}").status_code == 404
+
+    # Log in with Moodle first so all subsequent actions belong to the paired Moodle owner.
+    monkeypatch.setattr(get_settings(), 'MOODLE_MOCK_MODE', True)
+    client.post('/api/auth/login', json={'token': 'mock_token'})
+    assert client.post('/api/sync/extension', json=source_payload()).status_code == 200
+    before = client.get('/api/workspace/courses/612').json()
+    mix_id = before['topic_mixes'][0]['mix_id']
+    client.patch(f'/api/workspace/mixes/{mix_id}/notes', json={'notes': 'Old note to reset'})
+    assert client.post('/api/workspace/courses/confirm-structure', json={
+        'course_id': 612,
+        'title': 'Графи й дерева',
+        'topics': [{'topic_index': 1, 'title': 'Custom Org', 'summary': '', 'material_ids': [101]}],
+    }).status_code == 200
+
+    # Other owner cannot reset this owner's course.
+    other = TestClient(app)
+    other.get('/api/workspace/session')
+    assert other.post('/api/workspace/courses/612/reset').status_code == 404
+
+    async def fresh_sections(self, **kwargs):
+        return [{'id': 1, 'name': 'Тема 1: Свіжі графи', 'modules': [
+            {'id': 501, 'name': 'Нова лекція', 'modname': 'page', 'description': 'Оновлений матеріал'},
+        ]}]
+
+    monkeypatch.setattr(MoodleClient, 'get_course_contents', fresh_sections)
+    res_moodle = client.post('/api/workspace/courses/612/reset')
+    assert res_moodle.status_code == 200
+    body = res_moodle.json()
+    assert body['resynced'] is True and body['deleted'] is False
+
+    after = client.get('/api/workspace/courses/612').json()
+    assert after['organization'] is None
+    assert not after['topic_mixes'][0]['user_notes']
+    assert after['sections'][0]['name'] == 'Тема 1: Свіжі графи'

@@ -126,7 +126,8 @@
   });
   function tools(hash) {
     const course = /^course\/(\d+)\/([^/?]+)/.exec(hash);
-    const isTool = (course && course[2] !== 'overview') || ['settings','deadlines','connect','import'].includes(hash);
+    const isAnki = hash === 'anki' || hash.startsWith('anki/');
+    const isTool = (course && course[2] !== 'overview') || isAnki || ['settings','deadlines','connect','import'].includes(hash);
     const previousTool = lastTool;
     lastTool = isTool ? hash : '';
     if (previousTool && !isPickerRoute(previousTool) && previousTool !== hash && !isTool) {
@@ -135,14 +136,15 @@
       }).catch(err => UI.toast(err.message));
     }
     if (course && course[2] === 'overview') return false;
-    if (!course && !['settings','deadlines','connect','import'].includes(hash)) return false;
+    if (!course && !isAnki && !['settings','deadlines','connect','import'].includes(hash)) return false;
     const currentCourse = course && courses.find(c => c.id === course[1]);
     const title = course ? currentCourse?.name || 'Предмет'
+      : isAnki ? 'Картки Anki'
       : ({settings:'Налаштування',deadlines:'Дедлайни',connect:'Додати з Moodle',import:'Додати з Moodle'})[hash];
     const main = document.querySelector('#workspace-main');
     document.title = title + ' — Hustle';
     if (!currentCourse) document.querySelector('#view-name').textContent = isPickerRoute(hash) ? 'Мої предмети' : title;
-    const navHash = isPickerRoute(hash) ? 'courses' : hash;
+    const navHash = isPickerRoute(hash) ? 'courses' : (isAnki ? 'anki' : hash);
     const activeHash = course ? 'course/' + course[1] : navHash;
     document.querySelectorAll('[data-nav],.sidebar-course').forEach(a => {
       if (a.hash === '#' + activeHash) a.setAttribute('aria-current','page');

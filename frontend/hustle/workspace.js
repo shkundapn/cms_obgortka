@@ -5,7 +5,7 @@
   const body = document.querySelector('#dialog-body');
   const close = document.querySelector('[data-close-dialog]');
   document.querySelector('.skip-link').onclick=event=>{event.preventDefault();main.focus();};
-  const nav = [['dashboard','Дашборд','dashboard'],['courses','Мої курси','courses'],['calendar','Календар','calendar'],['deadlines','Дедлайни','clock'],['settings','Налаштування','settings']];
+  const nav = [['dashboard','Дашборд','dashboard'],['courses','Мої курси','courses'],['anki','Картки Anki','practice'],['calendar','Календар','calendar'],['deadlines','Дедлайни','clock'],['settings','Налаштування','settings']];
   let account, courses = [], currentBundle, generation = 0, busy = false, importState, courseQuery='';
   let stream, refreshAvailable = false;
 
@@ -95,6 +95,9 @@
         courses=await UI.api(courseListUrl); if(turn!==generation)return;
         title='Мій план';
         main.innerHTML=HustlePlan.render(courses,addButtons);
+      } else if(route.view==='anki') {
+        title='Інтервальне повторення Anki';
+        main.innerHTML='<div class="anki-page"><p class="muted" role="status">Завантажуємо Anki…</p></div>';
       } else if(route.view==='calendar') {
         title='Календар';
         main.innerHTML=window.HustleCalendar ? HustleCalendar.shell(courses) : heading(title);
@@ -120,6 +123,7 @@
       if(window.HustleSpace){HustleSpace.preview(main.querySelector('[data-agenda-preview]'),account);HustleSpace.preview(main.querySelector('[data-course-agenda]'),account,route.courseId);}
       HustleDashboard.loadActivity(main.querySelector('[data-dashboard-activity]'),courses);
       HustlePlan.mount(main,account,courses);
+      if(route.view==='anki')window.HustleAnki?.mountPage?.(main,account);
       window.HustleLearningHub?.mount(main,account,currentBundle);
       window.HustleCalendar?.mount(main,account,courses);
       window.HustleFrame?.mount(main,account,courses,currentBundle);

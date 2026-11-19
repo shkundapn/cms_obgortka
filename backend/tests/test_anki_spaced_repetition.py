@@ -125,3 +125,85 @@ def test_anki_settings_learned_definitions_and_varying_intervals(context):
     other_sess = other.get("/api/workspace/anki/session").json()
     assert other_sess["stats"]["learned_count"] == 0
     assert other_sess["queue"] == []
+
+
+def test_anki_fsrs_calibration_course_counters_and_streak(context):
+    client, _ = context
+    c1 = client.post("/api/workspace/courses/create-text", json={
+        "title": "Алгоритми",
+        "topic_title": "Графи",
+        "content_text": "Пошук у ширину BFS знаходить найкоротший шлях у незваженому графі.",
+        "tools_config": {"mermaid_diagrams": False, "visual_cards": False, "flashcards": True},
+    }).json()["course_id"]
+    c2 = client.post("/api/workspace/courses/create-text", json={
+        "title": "Бази даних",
+        "topic_title": "Індекси",
+        "content_text": "B-дерево забезпечує пошук за логарифмічний час.",
+        "tools_config": {"mermaid_diagrams": False, "visual_cards": False, "flashcards": True},
+    }).json()["course_id"]
+
+    # Add new (unlearned) cards to both courses
+    card_a = client.post("/api/workspace/anki/cards", json={
+        "front": "BFS складність",
+        "back": "O(V + E)",
+        "course_id": c1,
+        "is_learned": False,
+    }).json()["card_key"]
+    client.post("/api/workspace/anki/cards", json={
+        "front": "B-дерево висота",
+        "back": "O(log N)",
+        "course_id": c2,
+        "is_learned": False,
+    })
+
+    # Update adaptive FSRS calibration settings
+    cal_res = client.put("/api/workspace/anki/settings", json={
+        "target_retention": 0.94,
+        "daily_minutes": 30,
+        "avg_seconds_per_card": 15.0,
+        "new_cards_limit": 24,
+        "daily_limit": 120,
+        "maximum_interval": 180,
+        "learning_steps": [1, 10],
+        "relearning_steps": [10],
+        "fsrs_weights": [0.4, 0.6, 2.4, 5.8],
+    })
+    assert cal_res.status_code == 200
+    cal_data = cal_res.json()
+    assert cal_data["settings"]["target_retention"] == 0.94
+    assert cal_data["settings"]["daily_minutes"] == 30
+    assert cal_data["settings"]["new_cards_limit"] == 24
+    assert cal_data["settings"]["maximum_interval"] == 180
+    assert cal_data["settings"]["learning_steps"] == [1, 10]
+
+    # Submit FSRS-computed review from srsEngine.ts
+    rev = client.post("/api/workspace/anki/cards/review", json={
+        "card_key": card_a,
+        "rating": "good",
+        "interval_days": 3.5,
+        "next_review_at": "2026-11-22T12:00:00+00:00",
+        "card_state": "review",
+        "repetitions": 1,
+        "lapses": 0,
+        "ease_factor": 2.45,
+        "fsrs_state": {"stability": 3.5, "difficulty": 4.2, "state": "review", "reps": 1},
+        "review_duration_ms": 11000,
+    })
+    assert rev.status_code == 200
+    rev_data = rev.json()
+    assert rev_data["card_state"] == "review"
+    assert rev_data["interval_days"] == 3.5
+    sess = rev_data["session"]
+    assert sess["stats"]["study_streak"] >= 1
+    assert sess["stats"]["reviewed_today"] >= 1
+
+    # Verify per-course counters and course_id filtering
+    course1_meta = next(c for c in sess["courses"] if c["course_id"] == c1)
+    assert course1_meta["total_count"] >= 1
+    assert course1_meta["mastered_count"] >= 1
+    assert course1_meta["progress_percent"] > 0
+
+    scoped = client.get(f"/api/workspace/anki/session?course_id={c2}").json()
+    assert scoped["course_id"] == c2
+    assert all(c["course_id"] == c2 for c in scoped["queue"])
+

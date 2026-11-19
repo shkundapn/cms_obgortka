@@ -336,7 +336,7 @@
             </div>
             ${deadlineList(list, !course, course ? 3 : Infinity)}
           </section>
-          ${course ? window.HustleTopicCards?.overview(course.id) || '' : ''}
+          ${course ? window.HustleTopicCards?.overview(course.id) || '' : (window.HustleAnki ? '<section class="today-anki" data-today-anki aria-label="Картки інтервального повторення Anki"></section>' : '')}
         </div>
         <aside class="dashboard-aside">
           ${weeklyChart(course)}
@@ -361,7 +361,7 @@
         ${badge(task)}${icon('arrow')}</a>${H.liveCalendar?.deadlineButton(task) || ''}${fire.edge(task.due, task.done)}</article>`).join('')}
     </section>` : '';
     const header = `${course ? '<a class="back-to-courses" href="#courses">← Усі предмети</a>' : ''}${heading(course ? course.name : 'Мій огляд', course ? (H.paperOral?.button(course) || '') : (H.liveCalendar?.inboxButton() || H.calendar.button()))}`;
-    return `${header}<div class="dashboard-layout desk-layout">${focusCard(course, next)}${metrics(course)}<div class="dashboard-main">${queue}${preparationChecklist(course, list)}${course ? `<template><section class="dash-panel course-material-panel"><div class="panel-title"><h2>Матеріали предмета</h2></div>${course.materials.map((m, i) => `<button class="course-material-link" data-material="${i}" data-course="${course.id}" data-focus-id="dash-material-${course.id}-${i}">${icon('files')}<span><strong>${esc(m.title)}</strong><small>${esc(m.type)}</small></span>${icon('arrow')}</button>`).join('')}</section></template>` : ''}${weeklyChart(course)}</div><aside class="dashboard-aside">${calendarGrid(true, course)}</aside></div>`;
+    return `${header}<div class="dashboard-layout desk-layout">${focusCard(course, next)}${metrics(course)}<div class="dashboard-main">${queue}${preparationChecklist(course, list)}${!course && window.HustleAnki ? '<section class="today-anki" data-today-anki aria-label="Картки інтервального повторення Anki"></section>' : ''}${course ? `<template><section class="dash-panel course-material-panel"><div class="panel-title"><h2>Матеріали предмета</h2></div>${course.materials.map((m, i) => `<button class="course-material-link" data-material="${i}" data-course="${course.id}" data-focus-id="dash-material-${course.id}-${i}">${icon('files')}<span><strong>${esc(m.title)}</strong><small>${esc(m.type)}</small></span>${icon('arrow')}</button>`).join('')}</section></template>` : ''}${weeklyChart(course)}</div><aside class="dashboard-aside">${calendarGrid(true, course)}</aside></div>`;
   }
   function deadlinesView(course) {
     const now = Date.now();
@@ -428,6 +428,7 @@
     else if (!mountedWeek) main.innerHTML = hash === 'calendar' ? calendarView() : hash === 'courses' ? coursesView() : dashboardView(course);
     window.HustleTopicCards?.mountOverview(main);
     H.liveCalendar?.mount(hash, month, selectedDate, course);
+    window.HustleAnki?.mount?.(main, H.account ? { owner_id: H.account.owner } : undefined);
     fire.mount(main); paintTimer(); return true;
   }
   function refresh(focusSelector) {

@@ -7,6 +7,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException
 
 
+from zoneinfo import ZoneInfo
+
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
+
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "daily_limit": 20,
     "course_ids": [],
@@ -17,13 +21,26 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "good_days": 1.0,
     "easy_days": 4.0,
     "interval_multiplier": 1.0,
+    "target_retention": 0.90,
+    "daily_minutes": 20,
+    "avg_seconds_per_card": 18.0,
+    "new_cards_limit": 15,
+    "maximum_interval": 365,
+    "learning_steps": [1, 10],
+    "relearning_steps": [10],
+    "fsrs_weights": [],
 }
 
 RATING_VALUES = ("again", "hard", "good", "easy")
+CARD_STATES = ("new", "learning", "review", "relearning")
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _kyiv_day(dt: Optional[datetime] = None) -> str:
+    return (dt or _utc_now()).astimezone(KYIV_TZ).date().isoformat()
 
 
 def _utc_iso(dt: Optional[datetime] = None) -> str:
@@ -65,6 +82,13 @@ def format_interval_uk(interval_days: float) -> str:
     return f"{months} міс"
 
 
+def _ensure_columns(conn: Any, table: str, definitions: Dict[str, str]) -> None:
+    existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for col, col_def in definitions.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+
+
 def ensure_anki_tables(store: Any) -> None:
     with store._connect() as conn:
         conn.execute(
@@ -80,9 +104,31 @@ def ensure_anki_tables(store: Any) -> None:
                 good_days REAL NOT NULL DEFAULT 1.0,
                 easy_days REAL NOT NULL DEFAULT 4.0,
                 interval_multiplier REAL NOT NULL DEFAULT 1.0,
+                target_retention REAL NOT NULL DEFAULT 0.90,
+                daily_minutes INTEGER NOT NULL DEFAULT 20,
+                avg_seconds_per_card REAL NOT NULL DEFAULT 18.0,
+                new_cards_limit INTEGER NOT NULL DEFAULT 15,
+                maximum_interval INTEGER NOT NULL DEFAULT 365,
+                learning_steps_json TEXT NOT NULL DEFAULT '[1, 10]',
+                relearning_steps_json TEXT NOT NULL DEFAULT '[10]',
+                fsrs_weights_json TEXT NOT NULL DEFAULT '[]',
                 updated_at TEXT NOT NULL
             )
             """
+        )
+        _ensure_columns(
+            conn,
+            "anki_settings",
+            {
+                "target_retention": "REAL NOT NULL DEFAULT 0.90",
+                "daily_minutes": "INTEGER NOT NULL DEFAULT 20",
+                "avg_seconds_per_card": "REAL NOT NULL DEFAULT 18.0",
+                "new_cards_limit": "INTEGER NOT NULL DEFAULT 15",
+                "maximum_interval": "INTEGER NOT NULL DEFAULT 365",
+                "learning_steps_json": "TEXT NOT NULL DEFAULT '[1, 10]'",
+                "relearning_steps_json": "TEXT NOT NULL DEFAULT '[10]'",
+                "fsrs_weights_json": "TEXT NOT NULL DEFAULT '[]'",
+            },
         )
         conn.execute(
             """
@@ -102,6 +148,8 @@ def ensure_anki_tables(store: Any) -> None:
                 lapses INTEGER NOT NULL DEFAULT 0,
                 ease_factor REAL NOT NULL DEFAULT 2.5,
                 interval_days REAL NOT NULL DEFAULT 0.0,
+                card_state TEXT NOT NULL DEFAULT 'new',
+                fsrs_state TEXT,
                 last_rating TEXT,
                 last_reviewed_at TEXT,
                 next_review_at TEXT,
@@ -111,12 +159,59 @@ def ensure_anki_tables(store: Any) -> None:
             )
             """
         )
+        _ensure_columns(
+            conn,
+            "anki_cards",
+            {
+                "card_state": "TEXT NOT NULL DEFAULT 'new'",
+                "fsrs_state": "TEXT",
+            },
+        )
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_anki_cards_owner_due
             ON anki_cards(owner_id, next_review_at, is_learned)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS anki_review_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id TEXT NOT NULL,
+                card_key TEXT NOT NULL,
+                course_id INTEGER NOT NULL DEFAULT 0,
+                rating TEXT NOT NULL,
+                reviewed_at TEXT NOT NULL,
+                review_day TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_anki_review_logs_owner_day
+            ON anki_review_logs(owner_id, review_day)
+            """
+        )
+
+
+def _safe_json_list(raw: Any, fallback: List[Any], cast: Any = float) -> List[Any]:
+    if isinstance(raw, list):
+        items = raw
+    else:
+        try:
+            items = json.loads(raw or "[]")
+        except Exception:
+            items = list(fallback)
+    if not isinstance(items, list):
+        return list(fallback)
+    out = []
+    for item in items:
+        try:
+            out.append(cast(item))
+        except Exception:
+            continue
+    return out if out or not fallback else list(fallback)
 
 
 def get_anki_settings(store: Any, owner_id: str) -> Dict[str, Any]:
@@ -128,28 +223,42 @@ def get_anki_settings(store: Any, owner_id: str) -> Dict[str, Any]:
         ).fetchone()
     if not row:
         return dict(DEFAULT_SETTINGS)
-    try:
-        course_ids = [int(c) for c in json.loads(row["course_ids_json"] or "[]")]
-    except Exception:
-        course_ids = []
+    row_d = dict(row)
+    course_ids = _safe_json_list(row_d.get("course_ids_json"), [], int)
     return {
-        "daily_limit": max(1, min(100, int(row["daily_limit"]))),
+        "daily_limit": max(1, min(500, int(row_d["daily_limit"]))),
         "course_ids": course_ids,
-        "include_learned": bool(row["include_learned"]),
-        "include_new": bool(row["include_new"]),
-        "again_minutes": max(1, min(1440, int(row["again_minutes"]))),
-        "hard_minutes": max(5, min(2880, int(row["hard_minutes"]))),
-        "good_days": max(0.1, min(60.0, float(row["good_days"]))),
-        "easy_days": max(0.5, min(120.0, float(row["easy_days"]))),
-        "interval_multiplier": max(0.25, min(3.0, float(row["interval_multiplier"]))),
+        "include_learned": bool(row_d["include_learned"]),
+        "include_new": bool(row_d["include_new"]),
+        "again_minutes": max(1, min(1440, int(row_d["again_minutes"]))),
+        "hard_minutes": max(5, min(2880, int(row_d["hard_minutes"]))),
+        "good_days": max(0.1, min(60.0, float(row_d["good_days"]))),
+        "easy_days": max(0.5, min(120.0, float(row_d["easy_days"]))),
+        "interval_multiplier": max(0.25, min(3.0, float(row_d["interval_multiplier"]))),
+        "target_retention": max(0.80, min(0.98, float(row_d.get("target_retention") or 0.90))),
+        "daily_minutes": max(5, min(240, int(row_d.get("daily_minutes") or 20))),
+        "avg_seconds_per_card": max(5.0, min(120.0, float(row_d.get("avg_seconds_per_card") or 18.0))),
+        "new_cards_limit": max(0, min(100, int(row_d.get("new_cards_limit") if row_d.get("new_cards_limit") is not None else 15))),
+        "maximum_interval": max(1, min(36500, int(row_d.get("maximum_interval") or 365))),
+        "learning_steps": _safe_json_list(row_d.get("learning_steps_json"), [1, 10], int),
+        "relearning_steps": _safe_json_list(row_d.get("relearning_steps_json"), [10], int),
+        "fsrs_weights": _safe_json_list(row_d.get("fsrs_weights_json"), [], float),
     }
 
 
 def save_anki_settings(store: Any, owner_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     ensure_anki_tables(store)
     current = get_anki_settings(store, owner_id)
+    raw_ret = payload.get("target_retention", current["target_retention"])
+    try:
+        ret_val = float(raw_ret)
+        if ret_val > 1.0:
+            ret_val /= 100.0
+    except Exception:
+        ret_val = current["target_retention"]
+
     merged = {
-        "daily_limit": max(1, min(100, int(payload.get("daily_limit", current["daily_limit"])))),
+        "daily_limit": max(1, min(500, int(payload.get("daily_limit", current["daily_limit"])))),
         "course_ids": sorted({int(c) for c in payload.get("course_ids", current["course_ids"]) if int(c) > 0}),
         "include_learned": bool(payload.get("include_learned", current["include_learned"])),
         "include_new": bool(payload.get("include_new", current["include_new"])),
@@ -158,6 +267,14 @@ def save_anki_settings(store: Any, owner_id: str, payload: Dict[str, Any]) -> Di
         "good_days": max(0.1, min(60.0, float(payload.get("good_days", current["good_days"])))),
         "easy_days": max(0.5, min(120.0, float(payload.get("easy_days", current["easy_days"])))),
         "interval_multiplier": max(0.25, min(3.0, float(payload.get("interval_multiplier", current["interval_multiplier"])))),
+        "target_retention": round(max(0.80, min(0.98, ret_val)), 2),
+        "daily_minutes": max(5, min(240, int(payload.get("daily_minutes", current["daily_minutes"])))),
+        "avg_seconds_per_card": round(max(5.0, min(120.0, float(payload.get("avg_seconds_per_card", current["avg_seconds_per_card"])))), 1),
+        "new_cards_limit": max(0, min(100, int(payload.get("new_cards_limit", current["new_cards_limit"])))),
+        "maximum_interval": max(1, min(36500, int(payload.get("maximum_interval", current["maximum_interval"])))),
+        "learning_steps": [max(1, min(1440, int(x))) for x in _safe_json_list(payload.get("learning_steps", current["learning_steps"]), [1, 10], int)][:5] or [1, 10],
+        "relearning_steps": [max(1, min(1440, int(x))) for x in _safe_json_list(payload.get("relearning_steps", current["relearning_steps"]), [10], int)][:5] or [10],
+        "fsrs_weights": [round(float(x), 6) for x in _safe_json_list(payload.get("fsrs_weights", current["fsrs_weights"]), [], float)],
     }
     now = _utc_iso()
     with store._connect() as conn:
@@ -165,9 +282,12 @@ def save_anki_settings(store: Any, owner_id: str, payload: Dict[str, Any]) -> Di
             """
             INSERT INTO anki_settings (
                 owner_id, daily_limit, course_ids_json, include_learned, include_new,
-                again_minutes, hard_minutes, good_days, easy_days, interval_multiplier, updated_at
+                again_minutes, hard_minutes, good_days, easy_days, interval_multiplier,
+                target_retention, daily_minutes, avg_seconds_per_card, new_cards_limit,
+                maximum_interval, learning_steps_json, relearning_steps_json, fsrs_weights_json,
+                updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_id) DO UPDATE SET
                 daily_limit = excluded.daily_limit,
                 course_ids_json = excluded.course_ids_json,
@@ -178,6 +298,14 @@ def save_anki_settings(store: Any, owner_id: str, payload: Dict[str, Any]) -> Di
                 good_days = excluded.good_days,
                 easy_days = excluded.easy_days,
                 interval_multiplier = excluded.interval_multiplier,
+                target_retention = excluded.target_retention,
+                daily_minutes = excluded.daily_minutes,
+                avg_seconds_per_card = excluded.avg_seconds_per_card,
+                new_cards_limit = excluded.new_cards_limit,
+                maximum_interval = excluded.maximum_interval,
+                learning_steps_json = excluded.learning_steps_json,
+                relearning_steps_json = excluded.relearning_steps_json,
+                fsrs_weights_json = excluded.fsrs_weights_json,
                 updated_at = excluded.updated_at
             """,
             (
@@ -191,6 +319,14 @@ def save_anki_settings(store: Any, owner_id: str, payload: Dict[str, Any]) -> Di
                 merged["good_days"],
                 merged["easy_days"],
                 merged["interval_multiplier"],
+                merged["target_retention"],
+                merged["daily_minutes"],
+                merged["avg_seconds_per_card"],
+                merged["new_cards_limit"],
+                merged["maximum_interval"],
+                json.dumps(merged["learning_steps"]),
+                json.dumps(merged["relearning_steps"]),
+                json.dumps(merged["fsrs_weights"]),
                 now,
             ),
         )
@@ -263,6 +399,51 @@ def _interval_previews(card: Dict[str, Any], settings: Dict[str, Any]) -> Dict[s
     return previews
 
 
+def _upsert_synced_card(
+    conn: Any,
+    owner_id: str,
+    key: str,
+    course_id: int,
+    course_title: str,
+    topic_index: int,
+    topic_title: str,
+    front: str,
+    back: str,
+    source_citation: Optional[str],
+    now: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO anki_cards (
+            owner_id, card_key, course_id, course_title,
+            topic_index, topic_title, front, back, source_citation,
+            is_learned, is_custom, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+        ON CONFLICT(owner_id, card_key) DO UPDATE SET
+            course_title = excluded.course_title,
+            topic_title = excluded.topic_title,
+            front = excluded.front,
+            back = excluded.back,
+            source_citation = excluded.source_citation,
+            updated_at = excluded.updated_at
+        """,
+        (
+            owner_id,
+            key,
+            course_id,
+            course_title,
+            topic_index,
+            topic_title,
+            front,
+            back,
+            source_citation,
+            now,
+            now,
+        ),
+    )
+
+
 def sync_course_flashcards(store: Any, owner_id: str) -> List[Dict[str, Any]]:
     """Synchronize flashcards from all courses of owner into anki_cards without losing review schedules."""
     ensure_anki_tables(store)
@@ -272,12 +453,25 @@ def sync_course_flashcards(store: Any, owner_id: str) -> List[Dict[str, Any]]:
 
     courses = store.list_courses(owner_id=owner_id)
     with store._connect() as conn:
+        wf_by_course: Dict[int, List[Dict[str, Any]]] = {}
+        try:
+            wf_rows = conn.execute(
+                "SELECT course_id, topic_index, front, back, source_citation FROM workspace_flashcards WHERE owner_id = ?",
+                (owner_id,),
+            ).fetchall()
+            for r in wf_rows:
+                wf_by_course.setdefault(int(r["course_id"]), []).append(dict(r))
+        except Exception:
+            wf_by_course = {}
+
         for course in courses:
             bundle = store.get_course_bundle(course.course_id, owner_id=owner_id)
             if not bundle:
                 continue
             course_card_count = 0
+            topic_titles: Dict[int, str] = {}
             for mix in bundle["topic_mixes"]:
+                topic_titles[int(mix.topic_index)] = mix.title
                 if not getattr(mix, "flashcards", None):
                     continue
                 for card in mix.flashcards:
@@ -290,36 +484,27 @@ def sync_course_flashcards(store: Any, owner_id: str) -> List[Dict[str, Any]]:
                         continue
                     seen_keys.add(key)
                     course_card_count += 1
-                    conn.execute(
-                        """
-                        INSERT INTO anki_cards (
-                            owner_id, card_key, course_id, course_title,
-                            topic_index, topic_title, front, back, source_citation,
-                            is_learned, is_custom, created_at, updated_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
-                        ON CONFLICT(owner_id, card_key) DO UPDATE SET
-                            course_title = excluded.course_title,
-                            topic_title = excluded.topic_title,
-                            front = excluded.front,
-                            back = excluded.back,
-                            source_citation = excluded.source_citation,
-                            updated_at = excluded.updated_at
-                        """,
-                        (
-                            owner_id,
-                            key,
-                            course.course_id,
-                            course.title,
-                            mix.topic_index,
-                            mix.title,
-                            front,
-                            back,
-                            getattr(card, "source_citation", None),
-                            now,
-                            now,
-                        ),
+                    _upsert_synced_card(
+                        conn, owner_id, key, course.course_id, course.title,
+                        mix.topic_index, mix.title, front, back,
+                        getattr(card, "source_citation", None), now,
                     )
+            for wf in wf_by_course.get(int(course.course_id), []):
+                front = str(wf.get("front") or "").strip()
+                back = str(wf.get("back") or "").strip()
+                if not front or not back:
+                    continue
+                t_idx = int(wf.get("topic_index") or 0)
+                key = make_card_key(course.course_id, t_idx, front)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                course_card_count += 1
+                _upsert_synced_card(
+                    conn, owner_id, key, course.course_id, course.title,
+                    t_idx, topic_titles.get(t_idx, f"Тема {t_idx}"), front, back,
+                    wf.get("source_citation"), now,
+                )
             courses_meta.append({
                 "course_id": course.course_id,
                 "title": course.title,
@@ -456,11 +641,57 @@ def create_custom_anki_card(
     return {"success": True, "card_key": key}
 
 
+def _infer_card_state(row: Dict[str, Any]) -> str:
+    raw = str(row.get("card_state") or "").lower().strip()
+    if raw in CARD_STATES:
+        return raw
+    reps = int(row.get("repetitions") or 0)
+    lapses = int(row.get("lapses") or 0)
+    interval = float(row.get("interval_days") or 0.0)
+    if reps <= 0 and not row.get("last_reviewed_at"):
+        return "new"
+    if interval >= 1.0:
+        return "review"
+    return "relearning" if lapses > 0 and reps == 0 else "learning"
+
+
+def _compute_study_streak(conn: Any, owner_id: str, now_dt: datetime) -> int:
+    rows = conn.execute(
+        "SELECT DISTINCT review_day FROM anki_review_logs WHERE owner_id = ? ORDER BY review_day DESC",
+        (owner_id,),
+    ).fetchall()
+    days = {str(r["review_day"]) for r in rows if r["review_day"]}
+    if not days:
+        card_rows = conn.execute(
+            "SELECT last_reviewed_at FROM anki_cards WHERE owner_id = ? AND last_reviewed_at IS NOT NULL",
+            (owner_id,),
+        ).fetchall()
+        for cr in card_rows:
+            parsed = _parse_iso(cr["last_reviewed_at"])
+            if parsed:
+                days.add(_kyiv_day(parsed))
+    if not days:
+        return 0
+    today_dt = now_dt.astimezone(KYIV_TZ).date()
+    if today_dt.isoformat() in days:
+        cursor = today_dt
+    elif (today_dt - timedelta(days=1)).isoformat() in days:
+        cursor = today_dt - timedelta(days=1)
+    else:
+        return 0
+    streak = 0
+    while cursor.isoformat() in days:
+        streak += 1
+        cursor = cursor - timedelta(days=1)
+    return streak
+
+
 def review_anki_card(
     store: Any,
     owner_id: str,
     card_key: str,
     rating: str,
+    srs_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     ensure_anki_tables(store)
     if rating not in RATING_VALUES:
@@ -469,6 +700,7 @@ def review_anki_card(
     settings = get_anki_settings(store, owner_id)
     now_dt = _utc_now()
     now_iso = _utc_iso(now_dt)
+    review_day = _kyiv_day(now_dt)
 
     with store._connect() as conn:
         row = conn.execute(
@@ -479,10 +711,34 @@ def review_anki_card(
             raise HTTPException(status_code=404, detail="Картку не знайдено.")
 
         card_dict = dict(row)
-        reps, lapses, ef, interval_days, is_learned, next_dt = compute_next_schedule(
-            card_dict, rating, settings, now=now_dt
-        )
-        next_iso = _utc_iso(next_dt)
+        override = srs_override or {}
+        if override.get("interval_days") is not None and override.get("next_review_at"):
+            interval_days = round(max(1.0 / 1440.0, float(override["interval_days"])), 5)
+            parsed_next = _parse_iso(override.get("next_review_at")) or (now_dt + timedelta(days=interval_days))
+            next_iso = _utc_iso(parsed_next)
+            reps = int(override.get("repetitions") if override.get("repetitions") is not None else (int(card_dict.get("repetitions") or 0) + 1))
+            lapses = int(override.get("lapses") if override.get("lapses") is not None else int(card_dict.get("lapses") or 0))
+            ef = float(override.get("ease_factor") or card_dict.get("ease_factor") or 2.5)
+            card_state = str(override.get("card_state") or "").lower().strip()
+            if card_state not in CARD_STATES:
+                card_state = "review" if interval_days >= 1.0 else "learning"
+            is_learned = 1 if (int(card_dict.get("is_learned") or 0) or rating in ("good", "easy") or card_state == "review") else 0
+            fsrs_raw = override.get("fsrs_state")
+            fsrs_json = json.dumps(fsrs_raw, ensure_ascii=False) if isinstance(fsrs_raw, dict) else (
+                str(fsrs_raw) if isinstance(fsrs_raw, str) else card_dict.get("fsrs_state")
+            )
+        else:
+            reps, lapses, ef, interval_days, is_learned, next_dt = compute_next_schedule(
+                card_dict, rating, settings, now=now_dt
+            )
+            next_iso = _utc_iso(next_dt)
+            card_state = "review" if (interval_days >= 1.0 and rating in ("good", "easy")) else (
+                "relearning" if rating == "again" and int(card_dict.get("repetitions") or 0) > 0 else "learning"
+            )
+            fsrs_json = card_dict.get("fsrs_state")
+
+        duration_ms = max(0, min(600_000, int(override.get("review_duration_ms") or 0)))
+
         conn.execute(
             """
             UPDATE anki_cards
@@ -491,6 +747,8 @@ def review_anki_card(
                 ease_factor = ?,
                 interval_days = ?,
                 is_learned = ?,
+                card_state = ?,
+                fsrs_state = ?,
                 last_rating = ?,
                 last_reviewed_at = ?,
                 next_review_at = ?,
@@ -503,6 +761,8 @@ def review_anki_card(
                 ef,
                 interval_days,
                 is_learned,
+                card_state,
+                fsrs_json,
                 rating,
                 now_iso,
                 next_iso,
@@ -511,12 +771,20 @@ def review_anki_card(
                 card_key,
             ),
         )
+        conn.execute(
+            """
+            INSERT INTO anki_review_logs (owner_id, card_key, course_id, rating, reviewed_at, review_day, duration_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (owner_id, card_key, int(card_dict.get("course_id") or 0), rating, now_iso, review_day, duration_ms),
+        )
 
     session = get_anki_session(store, owner_id)
     return {
         "success": True,
         "card_key": card_key,
         "rating": rating,
+        "card_state": card_state,
         "interval_days": interval_days,
         "next_review_in": format_interval_uk(interval_days),
         "next_review_at": next_iso,
@@ -528,6 +796,15 @@ def review_anki_card(
 def _serialize_card(row: Dict[str, Any], settings: Dict[str, Any], now_dt: datetime) -> Dict[str, Any]:
     next_dt = _parse_iso(row.get("next_review_at"))
     is_due = next_dt is None or next_dt <= now_dt
+    card_state = _infer_card_state(row)
+    fsrs_obj: Optional[Dict[str, Any]] = None
+    if row.get("fsrs_state"):
+        try:
+            parsed = json.loads(row["fsrs_state"])
+            if isinstance(parsed, dict):
+                fsrs_obj = parsed
+        except Exception:
+            fsrs_obj = None
     return {
         "card_key": row["card_key"],
         "course_id": int(row["course_id"]),
@@ -543,6 +820,8 @@ def _serialize_card(row: Dict[str, Any], settings: Dict[str, Any], now_dt: datet
         "lapses": int(row["lapses"]),
         "ease_factor": float(row["ease_factor"]),
         "interval_days": float(row["interval_days"]),
+        "card_state": card_state,
+        "fsrs_state": fsrs_obj,
         "last_rating": row.get("last_rating"),
         "last_reviewed_at": row.get("last_reviewed_at"),
         "next_review_at": row.get("next_review_at"),
@@ -556,26 +835,79 @@ def get_anki_session(
     store: Any,
     owner_id: str,
     practice_all: bool = False,
+    course_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     courses_meta = sync_course_flashcards(store, owner_id)
     settings = get_anki_settings(store, owner_id)
     now_dt = _utc_now()
     today_prefix = now_dt.date().isoformat()
+    today_kyiv = _kyiv_day(now_dt)
 
     with store._connect() as conn:
         rows = conn.execute(
             "SELECT * FROM anki_cards WHERE owner_id = ? ORDER BY updated_at DESC",
             (owner_id,),
         ).fetchall()
+        study_streak = _compute_study_streak(conn, owner_id, now_dt)
+        reviewed_logs_today = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM anki_review_logs WHERE owner_id = ? AND review_day = ?",
+            (owner_id, today_kyiv),
+        ).fetchone()["cnt"]
 
     selected_courses = set(settings["course_ids"])
     all_serialized = [_serialize_card(dict(r), settings, now_dt) for r in rows]
 
-    # Filter by selected courses if user specified any (always include custom course_id=0 if included)
-    filtered = [
-        c for c in all_serialized
-        if not selected_courses or c["course_id"] in selected_courses or (c["is_custom"] and c["course_id"] == 0)
-    ]
+    # Per-course Anki counters (New blue, Learning red, Due/Review green, progress bar)
+    by_course: Dict[int, List[Dict[str, Any]]] = {}
+    for c in all_serialized:
+        by_course.setdefault(c["course_id"], []).append(c)
+    enriched_courses: List[Dict[str, Any]] = []
+    seen_cids = set()
+    for meta in courses_meta:
+        cid = int(meta["course_id"])
+        seen_cids.add(cid)
+        c_list = by_course.get(cid, [])
+        new_c = sum(1 for c in c_list if c["card_state"] == "new")
+        learn_c = sum(1 for c in c_list if c["card_state"] in ("learning", "relearning"))
+        due_c = sum(1 for c in c_list if c["card_state"] == "review" and c["is_due"])
+        mastered_c = sum(1 for c in c_list if c["card_state"] == "review" or c["is_learned"])
+        total_c = len(c_list)
+        enriched_courses.append({
+            **meta,
+            "new_count": new_c,
+            "learning_count": learn_c,
+            "due_count": due_c,
+            "total_count": total_c,
+            "mastered_count": mastered_c,
+            "progress_percent": round((mastered_c / total_c) * 100) if total_c else 0,
+        })
+    if 0 in by_course and 0 not in seen_cids:
+        c_list = by_course[0]
+        new_c = sum(1 for c in c_list if c["card_state"] == "new")
+        learn_c = sum(1 for c in c_list if c["card_state"] in ("learning", "relearning"))
+        due_c = sum(1 for c in c_list if c["card_state"] == "review" and c["is_due"])
+        mastered_c = sum(1 for c in c_list if c["card_state"] == "review" or c["is_learned"])
+        total_c = len(c_list)
+        enriched_courses.append({
+            "course_id": 0,
+            "title": "Власні визначення",
+            "cards_count": total_c,
+            "new_count": new_c,
+            "learning_count": learn_c,
+            "due_count": due_c,
+            "total_count": total_c,
+            "mastered_count": mastered_c,
+            "progress_percent": round((mastered_c / total_c) * 100) if total_c else 0,
+        })
+
+    # Filter by explicit course_id parameter or selected courses
+    if course_id is not None:
+        filtered = [c for c in all_serialized if c["course_id"] == int(course_id)]
+    else:
+        filtered = [
+            c for c in all_serialized
+            if not selected_courses or c["course_id"] in selected_courses or (c["is_custom"] and c["course_id"] == 0)
+        ]
 
     # Filter by learned/new flags per settings
     deck = [
@@ -583,11 +915,11 @@ def get_anki_session(
         if (c["is_learned"] and settings["include_learned"]) or ((not c["is_learned"]) and settings["include_new"])
     ]
 
-    # Prioritize learned due cards first, then unscheduled learned cards, then new due cards
+    # Prioritize learned/review/learning due cards first, then new cards
     due_cards = [c for c in deck if c["is_due"]]
     due_cards.sort(
         key=lambda c: (
-            0 if c["is_learned"] else 1,
+            0 if c["card_state"] in ("learning", "relearning") else (1 if c["is_learned"] or c["card_state"] == "review" else 2),
             c["next_review_at"] or "",
             c["course_id"],
             c["topic_index"],
@@ -613,29 +945,40 @@ def get_anki_session(
         else None
     )
 
-    reviewed_today = sum(
+    reviewed_cards_today = sum(
         1 for c in all_serialized
         if c["last_reviewed_at"] and str(c["last_reviewed_at"]).startswith(today_prefix)
     )
+    reviewed_today = max(int(reviewed_logs_today or 0), reviewed_cards_today)
     learned_cards = [c for c in filtered if c["is_learned"]]
     due_learned = sum(1 for c in due_cards if c["is_learned"])
     due_new = sum(1 for c in due_cards if not c["is_learned"])
+    new_count = sum(1 for c in deck if c["card_state"] == "new")
+    learning_count = sum(1 for c in deck if c["card_state"] in ("learning", "relearning"))
+    review_due_count = sum(1 for c in due_cards if c["card_state"] == "review")
 
     return {
         "settings": settings,
-        "courses": courses_meta,
+        "courses": enriched_courses,
+        "cards": filtered,
         "stats": {
             "total_cards": len(filtered),
             "deck_size": len(deck),
             "learned_count": len(learned_cards),
             "due_now": len(due_cards),
+            "total_due_today": len(due_cards),
             "due_learned": due_learned,
             "due_new": due_new,
+            "new_count": new_count,
+            "learning_count": learning_count,
+            "review_due_count": review_due_count,
             "reviewed_today": reviewed_today,
+            "study_streak": study_streak,
             "next_due_at": next_due_dt.isoformat() if next_due_dt else None,
             "next_due_in": next_due_in,
         },
         "practice_all": bool(practice_all),
+        "course_id": int(course_id) if course_id is not None else None,
         "queue": queue,
         "learned_cards": learned_cards[:120],
         "learned_keys": [c["card_key"] for c in all_serialized if c["is_learned"]],

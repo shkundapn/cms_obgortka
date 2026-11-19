@@ -170,7 +170,7 @@
     if(root.dataset.view!=='dashboard'||!courses.length)return;
     const state={root,account,courses,items:[],focus:null,bundles:new Map(),loadedBundles:new Map(),loadTurn:0,studyTurn:0};active=state;
     loadStudy(state);
-    window.HustleAnki?.mount?.(root);
+    window.HustleAnki?.mount?.(root, account);
     if(account.moodle_paired)load(state);else draw(state);
     root.querySelector('.today-dashboard').addEventListener('click',event=>{if(event.target.closest('[data-today-retry]'))load(state);});
     root.querySelector('.today-dashboard').addEventListener('change',event=>{

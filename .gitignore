@@ -79,4 +79,5 @@ pitch.pdf
 backups/
 output/
 tools/hustle-ui/node_modules/
+frontend/tools/hustle-ui/node_modules/
 .playwright-cli/

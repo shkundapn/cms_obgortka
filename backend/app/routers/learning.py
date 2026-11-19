@@ -545,7 +545,7 @@ async def module_tutor_check(
 
 
 class AnkiSettingsUpdateRequest(BaseModel):
-    daily_limit: int = Field(default=20, ge=1, le=100)
+    daily_limit: int = Field(default=20, ge=1, le=500)
     course_ids: List[int] = Field(default_factory=list)
     include_learned: bool = True
     include_new: bool = True
@@ -554,11 +554,27 @@ class AnkiSettingsUpdateRequest(BaseModel):
     good_days: float = Field(default=1.0, ge=0.1, le=60.0)
     easy_days: float = Field(default=4.0, ge=0.5, le=120.0)
     interval_multiplier: float = Field(default=1.0, ge=0.25, le=3.0)
+    target_retention: float = Field(default=0.90, ge=0.80, le=0.98)
+    daily_minutes: int = Field(default=20, ge=5, le=240)
+    avg_seconds_per_card: float = Field(default=18.0, ge=5.0, le=120.0)
+    new_cards_limit: int = Field(default=15, ge=0, le=100)
+    maximum_interval: int = Field(default=365, ge=1, le=36500)
+    learning_steps: List[int] = Field(default_factory=lambda: [1, 10])
+    relearning_steps: List[int] = Field(default_factory=lambda: [10])
+    fsrs_weights: List[float] = Field(default_factory=list)
 
 
 class AnkiReviewRequest(BaseModel):
     card_key: str = Field(min_length=1, max_length=200)
     rating: Literal["again", "hard", "good", "easy"]
+    interval_days: Optional[float] = Field(default=None, ge=0.0, le=36500.0)
+    next_review_at: Optional[str] = Field(default=None, max_length=80)
+    card_state: Optional[Literal["new", "learning", "review", "relearning"]] = None
+    repetitions: Optional[int] = Field(default=None, ge=0, le=100000)
+    lapses: Optional[int] = Field(default=None, ge=0, le=100000)
+    ease_factor: Optional[float] = Field(default=None, ge=1.0, le=5.0)
+    fsrs_state: Optional[Dict[str, Any]] = None
+    review_duration_ms: Optional[int] = Field(default=None, ge=0, le=600000)
 
 
 class AnkiLearnedRequest(BaseModel):
@@ -586,10 +602,11 @@ class AnkiCustomCardRequest(BaseModel):
 async def anki_session(
     response: Response,
     practice_all: bool = False,
+    course_id: Optional[int] = None,
     owner: WorkspaceOwner = Depends(get_workspace_owner),
 ):
     private_response(response)
-    return get_anki_session(get_workspace_store(), owner.owner_id, practice_all=practice_all)
+    return get_anki_session(get_workspace_store(), owner.owner_id, practice_all=practice_all, course_id=course_id)
 
 
 @router.put("/anki/settings")
@@ -615,7 +632,8 @@ async def submit_anki_review(
 ):
     same_origin(request)
     private_response(response)
-    return review_anki_card(get_workspace_store(), owner.owner_id, req.card_key, req.rating)
+    override = req.model_dump(exclude={"card_key", "rating"}, exclude_none=True)
+    return review_anki_card(get_workspace_store(), owner.owner_id, req.card_key, req.rating, srs_override=override or None)
 
 
 @router.post("/anki/cards/learned")

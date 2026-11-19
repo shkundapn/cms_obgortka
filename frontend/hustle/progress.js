@@ -371,7 +371,7 @@
     }
   }
 
-  function trackRequest(path, label) {
+  function trackDetailedRequest(path, label) {
     if (typeof document === 'undefined') return () => {};
     const id = ++nextReqId;
     globalRequests.set(id, {
@@ -398,17 +398,137 @@
     };
   }
 
-  function mount(container, options = {}) {
-    return createController(container, options);
+  const pageOperations = new Set();
+  let pageSpinner, pageAnnouncement;
+  let showTimer = null, hideTimer = null, connectionTimer = null, visibleSince = 0;
+
+  function syncPageActivity() {
+    for (const operation of pageOperations) {
+      if (operation.isCurrent && !operation.isCurrent()) pageOperations.delete(operation);
+    }
+    if (pageOperations.size) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+      if (!connectionTimer) connectionTimer = setInterval(syncPageActivity, 400);
+      if (pageSpinner.hidden && !showTimer) {
+        showTimer = setTimeout(() => {
+          showTimer = null;
+          const active = [...pageOperations].filter(operation => !operation.isCurrent || operation.isCurrent());
+          if (!active.length) return;
+          visibleSince = Date.now();
+          pageSpinner.hidden = false;
+          pageAnnouncement.textContent = active.length === 1 ? active[0].label : 'Завантажуємо дані…';
+        }, 550);
+      }
+      return;
+    }
+    clearTimeout(showTimer);
+    clearInterval(connectionTimer);
+    showTimer = connectionTimer = null;
+    if (!pageSpinner.hidden && !hideTimer) {
+      hideTimer = setTimeout(() => {
+        hideTimer = null;
+        pageSpinner.hidden = true;
+        pageAnnouncement.textContent = '';
+      }, Math.max(160, 400 - (Date.now() - visibleSince)));
+    }
   }
 
-  function renderStaticLoading(title = 'Завантажуємо…', detail = '') {
+  function trackPageActivity(label, isCurrent) {
+    if (typeof document === 'undefined' || !document.body) return () => {};
+    // Course tools are a same-origin iframe in the workspace. Use its parent's indicator.
+    const frame = window.frameElement;
+    if (frame?.classList.contains('paper-course-tools') && window.parent.HustleProgress?.trackPageActivity) {
+      return window.parent.HustleProgress.trackPageActivity(label, () => frame.isConnected && (!isCurrent || isCurrent()));
+    }
+    if (!pageSpinner) {
+      pageSpinner = document.createElement('span');
+      pageSpinner.className = 'hp-page-spinner';
+      pageSpinner.hidden = true;
+      pageSpinner.innerHTML = '<progress class="loading-spinner" aria-hidden="true"></progress>';
+      pageAnnouncement = document.createElement('span');
+      pageAnnouncement.className = 'hp-screen-reader-status';
+      pageAnnouncement.setAttribute('role', 'status');
+      document.body.append(pageSpinner, pageAnnouncement);
+    }
+    const operation = { label: label || 'Завантажуємо дані…', isCurrent };
+    pageOperations.add(operation);
+    syncPageActivity();
+    return () => {
+      if (pageOperations.delete(operation)) syncPageActivity();
+    };
+  }
+
+  function trackRequest(path, label, { detailed = false } = {}) {
+    return detailed ? trackDetailedRequest(path, label) : trackPageActivity(label || describeEndpoint(path));
+  }
+
+  function mountStatus(container, options) {
+    if (!container || typeof document === 'undefined') return createController(container, options);
+    const status = document.createElement('p');
+    status.className = 'hp-status';
+    status.setAttribute('role', 'status');
+    if (options.append) container.append(status);
+    else container.replaceChildren(status);
+
+    let detail = options.detail || '';
+    let completed = options.completed || 0;
+    let total = options.total || 0;
+    let stopped = false;
+    const finish = trackPageActivity(options.title || options.stages?.[0], () => status.isConnected);
+
+    function update(patch = {}) {
+      if (stopped) return;
+      detail = patch.detail ?? detail;
+      completed = patch.completed ?? completed;
+      total = patch.total ?? total;
+      const message = [total ? `${Math.min(completed, total)} із ${total}` : '', detail].filter(Boolean).join(' · ');
+      status.hidden = !message;
+      if (status.textContent !== message) status.textContent = message;
+    }
+
+    function stop({ remove = false } = {}) {
+      if (stopped) return;
+      stopped = true;
+      finish();
+      status.hidden = true;
+      if (remove) status.remove();
+    }
+
+    function showResult(message, error = false) {
+      if (stopped) return;
+      stop();
+      status.classList.add(error ? 'hp-status--error' : 'hp-status--done');
+      if (error) status.setAttribute('role', 'alert');
+      status.hidden = false;
+      status.textContent = message;
+    }
+
+    update();
+    return {
+      element: status,
+      update,
+      setItemProgress(completed, total, detail = '') { update({ completed, total, detail }); },
+      setStage(index, detail) { update({ detail: detail ?? options.stages?.[index] }); },
+      complete(message = 'Готово') { showResult(message); },
+      fail(message = 'Не вдалося завершити операцію.') { showResult(message, true); },
+      stop,
+    };
+  }
+
+  function mount(container, options = {}) {
+    return options.detailed ? createController(container, options) : mountStatus(container, options);
+  }
+
+  function renderStaticLoading(title = 'Завантажуємо…', detail = '', { detailed = false } = {}) {
+    if (!detailed) return `<div class="hp-status" role="status">${esc(title)}${detail ? `<p class="hp-detail">${esc(detail)}</p>` : ''}</div>`;
     return `<div class="hp-card hp-card--compact"><div class="hp-head"><progress class="loading-spinner" aria-hidden="true"></progress><span class="hp-title" role="status">${esc(title)}</span></div><progress class="hp-bar" aria-label="${esc(title)}"></progress>${detail ? `<p class="hp-detail">${esc(detail)}</p>` : ''}</div>`;
   }
 
   const api = {
     mount,
     trackRequest,
+    trackPageActivity,
     renderStaticLoading,
     formatElapsed,
     formatRemaining,

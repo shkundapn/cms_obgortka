@@ -17,13 +17,13 @@
 }
 .workspace-topbar #view-name { min-width: 0; margin-right: auto; color: #756873; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .workspace-topbar > :is(a, button) { flex-shrink: 0; }
-.workspace-topbar:has(#view-name h1) { position: sticky; top: 0; z-index: 20; }
-.workspace-topbar.is-scrolled:has(#view-name h1) {
+.workspace-topbar:has(.course-parent li + li) { position: sticky; top: 0; z-index: 20; }
+.workspace-topbar.is-scrolled:has(.course-parent li + li) {
   background: #f5f1e8;
   box-shadow: 0 4px 12px #39273c0b;
 }
-.workspace-topbar:has(#view-name h1) #view-name { flex: 1; white-space: normal; overflow: visible; }
-.workspace-topbar #view-name h1 { margin: 0; color: #39273c; font-size: clamp(.95rem, 1.25vw, 1.125rem); line-height: 1.3; overflow-wrap: anywhere; }
+.workspace-topbar:has(.course-parent) #view-name { flex: 1; white-space: normal; overflow: visible; }
+.course-parent [aria-current="page"] { margin: 0; color: #39273c; font-size: clamp(.95rem, 1.25vw, 1.125rem); line-height: 1.3; overflow-wrap: anywhere; }
 .workspace-topbar #view-name h1:focus { outline: 0; }
 .course-parent ol {
   display: flex;
@@ -64,10 +64,10 @@
 .course-parent-link:hover,
 .course-parent-link:focus-visible { color: var(--plum); text-decoration: underline; }
 @media(max-width:40rem) {
-  .workspace-topbar:has(#view-name h1) { flex-wrap: wrap; gap: .4rem .6rem; }
-  .workspace-topbar:has(#view-name h1) #view-name { flex: 0 0 100%; order: 1; }
+  .workspace-topbar:has(.course-parent) { flex-wrap: wrap; gap: .4rem .6rem; }
+  .workspace-topbar:has(.course-parent) #view-name { flex: 0 0 100%; order: 1; }
   .course-parent-link { min-height: 2rem; }
-  .workspace-topbar:has(#view-name h1) .mobile-menu { margin-inline-end: auto; }
+  .workspace-topbar:has(.course-parent) .mobile-menu { margin-inline-end: auto; }
 }
 .workspace-nav a { font-size: .8rem; min-height: 2.9rem; }
 .workspace-nav a[aria-current="page"] { background: #e1d4eb; color: #49324f; box-shadow: inset 0 1px 0 #ffffff80; }

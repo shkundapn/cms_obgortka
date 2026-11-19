@@ -229,6 +229,19 @@
     submissions: ['assignments', 'Здачі'], grades: ['assignments', 'Оцінки'],
   };
   let renderedTrail = '';
+  function renderTrail(items, useHeading = true) {
+    const slot = document.querySelector('#view-name');
+    const signature = JSON.stringify([items, useHeading]);
+    if (renderedTrail === signature && slot.querySelector('.course-parent')) return;
+    renderedTrail = signature;
+    const tag = useHeading ? 'h1' : 'span';
+    const focus = useHeading ? ' tabindex="-1"' : '';
+    slot.innerHTML = `<nav class="course-parent" aria-label="Шлях сторінки"><ol>${items.map(({label, href}, index) =>
+      `<li>${index === items.length - 1
+        ? `<${tag}${focus} aria-current="page">${esc(label)}</${tag}>`
+        : `<a class="course-parent-link" href="${esc(href)}">${esc(label)}</a>`}</li>`).join('')}</ol></nav>`;
+  }
+
   function renderCourseTrail(course, section, topicTrail = []) {
     const courseRoute = '#course/' + course.id;
     const subsection = courseSubsections[section];
@@ -239,15 +252,7 @@
     }
     if (topicTrail.length) items.push(...topicTrail);
     else if (subsection) items.push({label: subsection[1]});
-
-    const slot = document.querySelector('#view-name');
-    const signature = JSON.stringify(items);
-    if (renderedTrail === signature && slot.querySelector('.course-parent')) return;
-    renderedTrail = signature;
-    slot.innerHTML = `<nav class="course-parent" aria-label="Шлях сторінки"><ol>${items.map(({label, href}, index) =>
-      `<li>${index === items.length - 1
-        ? `<h1 tabindex="-1" aria-current="page">${esc(label)}</h1>`
-        : `<a class="course-parent-link" href="${esc(href)}">${esc(label)}</a>`}</li>`).join('')}</ol></nav>`;
+    renderTrail(items);
   }
 
   function setCourseTrail(route, crumbs) {
@@ -328,7 +333,7 @@
     status.textContent = 'Зміни збережено.';
   });
   const add = '<a class="secondary" href="#connect">Додати з Moodle +</a>';
-  H.workspace = { get deadlineError() {return deadlineError;}, get courses() {return courses;}, tasks, notice, tools, courseHeader, updateCourses, courseAppearanceSettings, setCourseTrail, add };
+  H.workspace = { get deadlineError() {return deadlineError;}, get courses() {return courses;}, tasks, notice, tools, courseHeader, updateCourses, courseAppearanceSettings, renderTrail, setCourseTrail, add };
   if (location.hash === '#dashboard') history.replaceState(null,'','#plan');
   window.addEventListener('hashchange', () => {
     updateImportLink();

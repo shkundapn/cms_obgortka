@@ -199,6 +199,38 @@ progress.loading-spinner:indeterminate {
   }
 }
 
+.hp-page-spinner {
+  position: fixed;
+  z-index: 100;
+  inset-inline-end: max(1rem, env(safe-area-inset-right));
+  inset-block-end: max(1rem, env(safe-area-inset-bottom));
+  display: grid;
+  place-items: center;
+  width: 2.65rem;
+  height: 2.65rem;
+  border: 1px solid #e1d4e5;
+  border-radius: 50%;
+  background: #fffdf8;
+  box-shadow: 0 4px 16px #381b391a;
+  pointer-events: none;
+}
+
+.hp-page-spinner[hidden], .hp-status[hidden] { display: none; }
+.hp-page-spinner .loading-spinner { --size: 1.2rem; }
+
+.hp-screen-reader-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.hp-status { margin-block: .45rem; color: #68566e; font-size: .875rem; }
+.hp-status--done { color: #42624b; }
+.hp-status--error { color: #8a3f3c; }
+
 /* Global subtle top progress rail */
 .hp-top-rail {
   position: fixed;
@@ -392,6 +424,9 @@ progress.loading-spinner:indeterminate {
 .paper-frame-loader {
   margin-bottom: .75rem;
 }
+
+.paper-frame-loader:not(:has(> :not([hidden]))), .picker-batch-progress:not(:has(> :not([hidden]))) { display: none; }
+.picker-batch-progress:has(> .hp-status) { display: none; }
 
 /* Batch import row active spinner */
 .picker-batch-row .loading-spinner {

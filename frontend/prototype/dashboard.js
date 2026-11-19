@@ -99,16 +99,18 @@
         ${deadlineIdentity(task, showCourse, false)}${date}${icon('arrow')}</a>
       ${H.liveCalendar?.deadlineButton(task) || ''}${fire.edge(task.due, task.done)}</article>`;
   }
-  function deadlineList(list, showCourse, pendingLimit = Infinity) {
+  function deadlineList(list, showCourse, { limit = Infinity, showDetails = true } = {}) {
     const pending = list.filter(task => !task.done);
     const completed = list.filter(task => task.done);
-    const extra = pending.slice(pendingLimit, pendingLimit + 2);
+    const rows = pending.slice(0, limit).map(task => deadlineRow(task, showCourse)).join('') ||
+      `<p class="agenda-empty">${completed.length ? 'Немає невиконаних дедлайнів' : 'Найближчих дедлайнів немає.'}</p>`;
+    if (!showDetails) return rows;
+    const extra = pending.slice(limit, limit + 2);
     const preview = main.querySelector('.deadline-more');
     const showMore = preview?.dataset.scope === location.hash && preview.open;
     const existing = main.querySelector('.deadline-completed');
     const isOpen = existing?.dataset.scope === location.hash && existing.open;
-    return `${pending.slice(0, pendingLimit).map(task => deadlineRow(task, showCourse)).join('') ||
-      `<p class="agenda-empty">${completed.length ? 'Немає невиконаних дедлайнів' : 'Найближчих дедлайнів немає.'}</p>`}
+    return `${rows}
       ${extra.length ? `<details class="deadline-more" data-scope="${esc(location.hash)}"${showMore ? ' open' : ''}>
         <summary><span class="deadline-more-show">Показати ще ${extra.length}</span><span class="deadline-more-hide">Згорнути</span></summary>
         ${extra.map(task => deadlineRow(task, showCourse)).join('')}
@@ -181,10 +183,20 @@
     state.awards[id] = { points, course, day: today() };
     reward = { points, id };
   }
-  function weeklyChart(course) {
-    const days = Array.from({ length: 7 }, (_, i) => C.addDays(today(), i - 6));
+  function weeklyChart(course, inJourney = false) {
+    const currentDay = today();
+    const days = Array.from({ length: 7 }, (_, i) => C.addDays(currentDay, i - 6));
     const values = days.map(day => C.sum(state.records, { course: course?.id, from: day, to: day }) / 60), max = Math.max(H.state.minutes, ...values);
-    return `<section class="dash-panel activity-panel"><div class="panel-title"><h2>Час навчання</h2><span>Останні 7 днів</span></div><div class="activity-chart" role="img" aria-label="${days.map((day, i) => dateText(day) + ': ' + Math.floor(values[i]) + ' хв').join('; ')}">${days.map((day, i) => `<div class="activity-column ${day === today() ? 'is-today' : ''}"><span class="bar-value">${Math.floor(values[i])}</span><div class="bar-track"><i style="height:${values[i] / max * 100}%"></i></div><span>${dateText(day, { weekday: 'short' })}</span></div>`).join('')}</div><div class="chart-note"><i></i> Час у фокусі, хв</div></section>`;
+    const panelClass = inJourney ? 'reward-journey-activity' : 'dash-panel activity-panel';
+    const headingTag = inJourney ? 'h3' : 'h2';
+    return `<section class="${panelClass}">
+      <div class="panel-title"><${headingTag}>Час навчання</${headingTag}><span>Останні 7 днів</span></div>
+      <div class="activity-chart" role="img" aria-label="${days.map((day, i) => dateText(day) + ': ' + Math.floor(values[i]) + ' хв').join('; ')}">
+        ${days.map((day, i) => `<div class="activity-column ${day === currentDay ? 'is-today' : ''}">
+          <span class="bar-value">${Math.floor(values[i])}</span><div class="bar-track"><i style="height:${values[i] / max * 100}%"></i></div>
+          <span>${dateText(day, { weekday: 'short' })}</span></div>`).join('')}
+      </div><div class="chart-note"><i></i> Час у фокусі, хв</div>
+    </section>`;
   }
   function legacyFocusCard(course) {
     const list = tasks(course?.id), next = list.filter(t => !t.done).sort((a, b) => a.due - b.due || definitions.findIndex(d => d.kind === a.kind) - definitions.findIndex(d => d.kind === b.kind))[0];
@@ -326,11 +338,13 @@
     const header = course ? H.workspace.courseHeader(course) :
       heading('Мій огляд', H.liveCalendar?.inboxButton() || H.calendar.button());
     const addCourse = !course && !selected().length ? H.workspace.add : '';
-    const focusCourse = rewards?.preferred(selected(), list.find((task) => !task.done)?.course.id || selected()[0]?.id);
+    const showJourney = !course && Boolean(rewards);
+    const activity = weeklyChart(course, showJourney);
+    const focusCourse = showJourney && rewards.preferred(selected(), list.find((task) => !task.done)?.course.id || selected()[0]?.id);
     return `${header}${H.workspace.notice()}
-      <div class="dashboard-layout desk-layout compact-desk-layout study-overview-layout${!course && rewards ? ' has-reward-journey' : ''}">
+      <div class="dashboard-layout desk-layout compact-desk-layout study-overview-layout${showJourney ? ' has-reward-journey' : ''}">
         ${metrics(course)}
-        ${!course ? rewards?.panel(focusCourse) || '' : ''}
+        ${showJourney ? rewards.panel(focusCourse, activity) : ''}
         <div class="dashboard-main">
           ${addCourse ? `<div>${addCourse}</div>` : ''}
           ${course ? studyShortcuts(course) : ''}
@@ -339,12 +353,12 @@
               <div class="panel-title"><h2>Найближчі дедлайни</h2><a href="${deadlineLink}">Усі дедлайни ${icon('arrow')}</a></div>
               ${list.some(task => !task.done) ? '<span class="mascot-sticker mascot-sticker--deadline" aria-hidden="true"><img src="assets/mascot/deadline.webp" alt="" width="384" height="384" decoding="async"></span>' : ''}
             </div>
-            ${deadlineList(list, !course, course ? 3 : Infinity)}
+            ${deadlineList(list, !course, { limit: 3, showDetails: Boolean(course) })}
           </section>
           ${course ? window.HustleTopicCards?.overview(course.id) || '' : (window.HustleAnki ? '<section class="today-anki" data-today-anki aria-label="Картки інтервального повторення Anki"></section>' : '')}
         </div>
         <aside class="dashboard-aside">
-          ${weeklyChart(course)}
+          ${showJourney ? '' : activity}
           ${calendarGrid(true, course)}
         </aside>
       </div>`;
@@ -400,9 +414,9 @@
     }
     if (H.workspace && (hash === 'deadlines' || course?.connected && hash === 'course/' + course.id + '/assignments')) {
       document.title = 'Дедлайни — Hustle';
-      if (!course) document.querySelector('#view-name').textContent = 'Дедлайни';
+      if (!course) H.workspace.renderTrail([{ label: 'Мій огляд', href: '#plan' }, { label: 'Дедлайни' }], false);
       document.querySelectorAll('[data-nav],.sidebar-course').forEach(a => {
-        if (course && a.hash === '#course/' + course.id) a.setAttribute('aria-current','page');
+        if (course ? a.hash === '#course/' + course.id : a.dataset.nav === 'deadlines') a.setAttribute('aria-current','page');
         else a.removeAttribute('aria-current');
       });
       main.innerHTML = deadlinesView(course); H.liveCalendar?.mount(hash, month, selectedDate, course); fire.mount(main); return true;
@@ -430,7 +444,8 @@
     if (course && timerPhase(state.timer) === 'ready' && state.timer.course !== course.id) { state.timer.course = course.id; save(); }
     const title = course?.short || ({ plan: 'Мій огляд', courses: 'Мої предмети', calendar: 'Календар', [pomodoroRoute]: 'Налаштування', 'settings/courses': 'Налаштування' })[hash];
     document.querySelectorAll('[data-nav],.sidebar-course').forEach(a => { if (course ? a.hash === '#course/' + course.id : a.dataset.nav === (settingsPage ? 'settings' : hash)) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-    if (!course?.connected) document.querySelector('#view-name').textContent = hash === 'plan' ? '' : title;
+    if (H.workspace && hash === 'plan') H.workspace.renderTrail([{ label: title }], false);
+    else if (!course?.connected) document.querySelector('#view-name').textContent = hash === 'plan' ? '' : title;
     document.title = `${title} — Hustle`;
     // The weekly planner manages its own refreshes and open days.
     const mountedWeek = hash === 'calendar' && H.liveCalendar?.week && main.querySelector('[data-paper-week]');
@@ -553,8 +568,11 @@
         rewards?.earnDeadline(tasks().find(task => task.id === id));
       } else if (deadline) announce('Позначку виконання знято.');
       const check = refresh(selector);
-      if (deadline) check?.scrollIntoView({block: 'nearest'});
-      else if (state.completed[id]) check?.closest('.practice-line')?.classList.add('just-completed');
+      if (deadline) {
+        const target = check || main.querySelector('.deadline-queue .panel-title > a');
+        if (!check) target?.focus({ preventScroll: true });
+        target?.scrollIntoView({block: 'nearest'});
+      } else if (state.completed[id]) check?.closest('.practice-line')?.classList.add('just-completed');
     }
     if (el.hasAttribute('data-calendar-date')) { selectDay(el.dataset.calendarDate); }
     if (el.hasAttribute('data-month-step')) { const d = new Date(month + 'T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() + Number(el.dataset.monthStep)); month = d.toISOString().slice(0, 10); selectedDate = month; refresh(`[data-month-step="${el.dataset.monthStep}"]`); }
@@ -600,6 +618,7 @@
     nav.querySelector('[data-nav="plan"] span').textContent = 'Мій огляд';
     nav.querySelector('[data-nav="courses"] span').textContent = 'Мої предмети';
     const settings = nav.querySelector('[data-nav="settings"]');
+    if (H.workspace) settings.insertAdjacentHTML('beforebegin', `<a href="#deadlines" data-nav="deadlines">${icon('clock')}<span>Дедлайни</span></a>`);
     settings.insertAdjacentHTML('beforebegin', `<a href="#calendar" data-nav="calendar">${icon('calendar')}<span>Календар</span></a><a href="#anki" data-nav="anki">${icon('practice')}<span>Картки Anki</span></a>`);
     document.querySelector('.topbar-account').insertAdjacentHTML('beforebegin', `<div class="timer-menu">
       <button type="button" class="persistent-timer" id="persistent-timer" aria-expanded="false" aria-controls="timer-menu-panel">${icon('clock')}<span>Pomodoro</span></button>

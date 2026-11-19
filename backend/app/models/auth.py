@@ -45,6 +45,7 @@ class HealthCheckResponse(BaseModel):
 class ExtensionPairRequest(BaseModel):
     moodle_url: str = Field(..., description="Origin URL of the Moodle instance (e.g. https://learn.ucu.edu.ua)")
     cookie: str = Field(..., min_length=4, description="Active MoodleSession cookie transferred by the Chrome extension")
+    browser_my_html: Optional[str] = Field(None, max_length=600_000, description="Authenticated /my/ HTML fetched in the browser when Moodle blocks server IPs")
 
 
 class DevGoogleLoginRequest(BaseModel):

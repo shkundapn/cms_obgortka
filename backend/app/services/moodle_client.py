@@ -225,6 +225,27 @@ class MoodleClient:
             )
 
         html = res.text
+        return await self.parse_my_page_html(
+            html=html,
+            clean_cookie=clean_cookie,
+            base_url=base_url,
+            fetch_profile_pages=True,
+        )
+
+    async def parse_my_page_html(
+        self,
+        html: str,
+        clean_cookie: str,
+        base_url: Optional[str] = None,
+        fetch_profile_pages: bool = False,
+    ) -> Dict[str, Any]:
+        """Parse authenticated Moodle /my/ HTML into sesskey and user profile."""
+        base_url = (base_url or self.base_url).rstrip("/")
+        headers = {
+            "Cookie": f"MoodleSession={clean_cookie}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
 
         # Verify page is not a login page
         if 'name="username"' in html and 'name="password"' in html and 'action="' in html:
@@ -346,7 +367,7 @@ class MoodleClient:
 
         parsed_name, avatar_url, email = _extract_profile_fields(html, is_profile_page=False)
 
-        if user_id > 0 and (not parsed_name or not avatar_url or "/theme/image.php" in (avatar_url or "") or not email):
+        if fetch_profile_pages and user_id > 0 and (not parsed_name or not avatar_url or "/theme/image.php" in (avatar_url or "") or not email):
             try:
                 async with httpx.AsyncClient(timeout=min(self.settings.MOODLE_REQUEST_TIMEOUT, 8.0), follow_redirects=False) as prof_client:
                     prof_res = await prof_client.get(f"{base_url}/user/profile.php?id={user_id}", headers=headers)
@@ -1524,6 +1545,12 @@ class MoodleClient:
             raise MoodleAuthError("MoodleSession cookie is no longer valid for this course.", error_code="invalid_cookie")
 
         page_html = res.text
+        return self.parse_course_page_html(page_html)
+
+    def parse_course_page_html(self, page_html: str) -> List[Dict[str, Any]]:
+        """Parse a Moodle /course/view.php?id=... HTML page into structured sections."""
+        if self._looks_like_login_html(page_html):
+            raise MoodleAuthError("MoodleSession cookie is no longer valid for this course.", error_code="invalid_cookie")
         structured_sections = self.parse_moodle_course_html(page_html, self.base_url)
         # Some old themes wrap several independent activity links in one .activity.
         # Keep the legacy link parser for that shape, rather than lose sibling files.

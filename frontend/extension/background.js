@@ -82,12 +82,31 @@ async function pairMoodleCookie(moodleOrigin, cookieValue, portalUrlOverride, fo
     }
 
     try {
-      const res = await fetch(`${portalUrl}/api/auth/extension-pair`, {
+      let res = await fetch(`${portalUrl}/api/auth/extension-pair`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ moodle_url: moodleOrigin, cookie: cookieValue }),
       });
+      if (res.status === 502) {
+        const myRes = await fetch(`${moodleOrigin}/my/`, { credentials: 'include' });
+        const myHtml = await myRes.text().catch(() => '');
+        const isLogin = (myRes.url && myRes.url.includes('/login/')) ||
+          (myHtml.includes('name="username"') && myHtml.includes('name="password"'));
+        if (!myRes.ok || isLogin || !myHtml) {
+          return { success: false, status: 401, needsLogin: true, error: 'Увійди в Moodle у браузері.' };
+        }
+        res = await fetch(`${portalUrl}/api/auth/extension-pair`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            moodle_url: moodleOrigin,
+            cookie: cookieValue,
+            browser_my_html: myHtml.slice(0, 500000),
+          }),
+        });
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (res.status === 401) {
@@ -216,6 +235,94 @@ async function resolveWorkspaceHeaders(portalUrl) {
     headers['X-Workspace-Token'] = fallbackToken;
   }
   return headers;
+}
+
+function stripHtmlText(raw) {
+  return String(raw || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function extractCoursesFromHtml(html) {
+  const found = new Map();
+  const re = /<a[^>]+href=["'][^"']*\/course\/view\.php\?[^"']*?\bid=(\d+)[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const id = Number(m[1]);
+    const name = stripHtmlText(m[2]);
+    if (id > 1 && name && name.length > 1 && !found.has(id)) {
+      found.set(id, { id, fullname: name, shortname: `CRS-${id}` });
+    }
+  }
+  return Array.from(found.values());
+}
+
+async function fetchCoursesViaBrowser(moodleOrigin) {
+  const myRes = await fetch(`${moodleOrigin}/my/`, { credentials: 'include' });
+  const myHtml = await myRes.text().catch(() => '');
+  const isLogin = (myRes.url && myRes.url.includes('/login/')) ||
+    (myHtml.includes('name="username"') && myHtml.includes('name="password"'));
+  if (!myRes.ok || isLogin) {
+    return { success: false, status: 401, needsLogin: true, error: 'Увійди в Moodle повторно.' };
+  }
+  const sessMatch = myHtml.match(/"sesskey":"([a-zA-Z0-9]+)"/) || myHtml.match(/sesskey=([a-zA-Z0-9]+)/);
+  const sesskey = sessMatch ? sessMatch[1] : '';
+  if (sesskey) {
+    try {
+      const ajaxRes = await fetch(
+        `${moodleOrigin}/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=core_course_get_enrolled_courses_by_timeline_classification`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([{
+            index: 0,
+            methodname: 'core_course_get_enrolled_courses_by_timeline_classification',
+            args: { offset: 0, limit: 0, classification: 'all', sort: 'fullname' },
+          }]),
+        }
+      );
+      if (ajaxRes.ok) {
+        const payload = await ajaxRes.json().catch(() => null);
+        const courses = Array.isArray(payload) && payload[0] && !payload[0].error ? payload[0].data?.courses : null;
+        if (Array.isArray(courses) && courses.length) {
+          return { success: true, courses };
+        }
+      }
+    } catch {}
+  }
+  let courses = extractCoursesFromHtml(myHtml);
+  if (!courses.length) {
+    try {
+      const cpRes = await fetch(`${moodleOrigin}/my/courses.php`, { credentials: 'include' });
+      if (cpRes.ok) courses = extractCoursesFromHtml(await cpRes.text());
+    } catch {}
+  }
+  return { success: true, courses };
+}
+
+async function syncCourseViaBrowser(moodleOrigin, portalUrl, courseId, courseTitle, shortname) {
+  const courseRes = await fetch(`${moodleOrigin}/course/view.php?id=${Number(courseId)}`, { credentials: 'include' });
+  const courseHtml = await courseRes.text().catch(() => '');
+  const isLogin = (courseRes.url && courseRes.url.includes('/login/')) ||
+    (courseHtml.includes('name="username"') && courseHtml.includes('name="password"'));
+  if (!courseRes.ok || isLogin || !courseHtml) {
+    return { success: false, status: 401, needsLogin: true, error: 'Не вдалося завантажити сторінку курсу в Moodle.' };
+  }
+  const res = await fetch(`${portalUrl}/api/workspace/courses/${Number(courseId)}/sync-moodle`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      course_title: courseTitle || undefined,
+      shortname: shortname || undefined,
+      course_html: courseHtml.slice(0, 1800000),
+      fetch_files: false,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { success: false, status: res.status, error: data.detail || `HTTP ${res.status}` };
+  }
+  return { success: true, data };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

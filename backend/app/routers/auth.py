@@ -571,14 +571,29 @@ async def extension_pair_moodle_cookie(
         )
     except MoodleAuthError as exc:
         if exc.error_code == "upstream_blocked":
+            if req.browser_my_html and req.browser_my_html.strip():
+                try:
+                    auth_result = await client.parse_my_page_html(
+                        html=req.browser_my_html,
+                        clean_cookie=req.cookie.strip(),
+                        base_url=target_url,
+                        fetch_profile_pages=False,
+                    )
+                except MoodleAuthError as html_exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail=html_exc.message or "MoodleSession cookie is invalid or expired.",
+                    )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=exc.message or "Target Moodle server blocked direct verification from the backend.",
+                )
+        else:
             raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=exc.message or "Target Moodle server blocked direct verification from the backend.",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=exc.message or "MoodleSession cookie is invalid or expired.",
             )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=exc.message or "MoodleSession cookie is invalid or expired.",
-        )
     except MoodleConnectionError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

@@ -657,6 +657,7 @@ class BackendMoodleSyncRequest(BaseModel):
     authority: Optional[str] = None
     tools_config: Optional[CourseToolsConfig] = None
     fetch_files: bool = True
+    course_html: Optional[str] = None
 
 
 @router.post("/api/workspace/courses/{course_id}/sync-moodle")
@@ -686,33 +687,38 @@ async def sync_course_from_moodle_backend(
     course_short = (req_body.shortname or "").strip() or f"C{course_id}"
 
     try:
-        contents_coro = client.get_course_contents(
-            token=moodle_token,
-            course_id=course_id,
-            auth_type=auth_type,
-            sesskey=sesskey,
-        )
-        if not req_body.course_title:
-            courses_coro = client.get_user_courses(
+        if req_body.course_html and req_body.course_html.strip():
+            raw_sections = client.parse_course_page_html(req_body.course_html)
+        else:
+            contents_coro = client.get_course_contents(
                 token=moodle_token,
-                user_id=session["user_id"],
+                course_id=course_id,
                 auth_type=auth_type,
                 sesskey=sesskey,
             )
-            raw_sections, courses_res = await asyncio.gather(
-                contents_coro, courses_coro, return_exceptions=True
-            )
-            if isinstance(raw_sections, Exception):
-                raise raw_sections
-            if isinstance(courses_res, list):
-                for c in courses_res:
-                    if int(c.get("id", 0)) == course_id:
-                        course_title = c.get("fullname") or course_title
-                        course_short = c.get("shortname") or course_short
-                        break
-        else:
-            raw_sections = await contents_coro
+            if not req_body.course_title:
+                courses_coro = client.get_user_courses(
+                    token=moodle_token,
+                    user_id=session["user_id"],
+                    auth_type=auth_type,
+                    sesskey=sesskey,
+                )
+                raw_sections, courses_res = await asyncio.gather(
+                    contents_coro, courses_coro, return_exceptions=True
+                )
+                if isinstance(raw_sections, Exception):
+                    raise raw_sections
+                if isinstance(courses_res, list):
+                    for c in courses_res:
+                        if int(c.get("id", 0)) == course_id:
+                            course_title = c.get("fullname") or course_title
+                            course_short = c.get("shortname") or course_short
+                            break
+            else:
+                raw_sections = await contents_coro
     except MoodleAuthError as exc:
+        if exc.error_code == "upstream_blocked":
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message or "Moodle blocked server request.")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=exc.message or "MoodleSession expired.")
     except MoodleConnectionError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message or "Cannot reach Moodle.")
@@ -727,7 +733,12 @@ async def sync_course_from_moodle_backend(
 
     # Prepare bounded concurrent downloads using one shared pooled HTTP client
     download_sem = asyncio.Semaphore(5)
-    allow_file_fetch = bool(req_body.fetch_files and auth_type == "cookie" and not str(moodle_token).startswith("mock_"))
+    allow_file_fetch = bool(
+        req_body.fetch_files
+        and not req_body.course_html
+        and auth_type == "cookie"
+        and not str(moodle_token).startswith("mock_")
+    )
     existing_manifest = await asyncio.to_thread(store.get_course_file_manifest, owner.owner_id, course_id)
     prior_chunks = await asyncio.to_thread(store.get_course_module_chunks_map, owner.owner_id, course_id)
 

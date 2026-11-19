@@ -18,24 +18,28 @@
     calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 2v6M17 2v6M3 11h18"/>',
   };
 let refreshPromise = null;
-function refreshViaExtension(moodleOrigin) {
+function extensionCall(type, extra = {}, timeoutMs = 1500) {
  return new Promise(resolve => {
-  if (typeof window === 'undefined' || !window.postMessage) { resolve(false); return; }
+  if (typeof window === 'undefined' || !window.postMessage) { resolve(null); return; }
   const id = (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
   let settled = false;
-  const finish = value => { if (settled) return; settled = true; clearTimeout(timer); window.removeEventListener('message', onMessage); resolve(Boolean(value)); };
+  const finish = value => { if (settled) return; settled = true; clearTimeout(timer); window.removeEventListener('message', onMessage); resolve(value); };
   const onMessage = event => {
    if (event.source !== window || event.origin !== location.origin || event.data?.source !== 'hustle-extension' || event.data.id !== id) return;
-   finish(event.data.success && event.data.paired);
+   finish(event.data);
   };
-  const timer = setTimeout(() => finish(false), 1500);
+  const timer = setTimeout(() => finish(null), timeoutMs);
   window.addEventListener('message', onMessage);
-  window.postMessage({ source: 'hustle-page', type: 'REFRESH_SESSION', id, moodleOrigin }, location.origin);
+  window.postMessage({ source: 'hustle-page', type, id, ...extra }, location.origin);
  });
+}
+function refreshViaExtension(moodleOrigin) {
+ return extensionCall('REFRESH_SESSION', { moodleOrigin }, 1500).then(data => Boolean(data?.success && data?.paired));
 }
 window.UI = {
 escape(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); },
 icon(name) { return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes[name] || shapes.plan}</svg>`; },
+extensionCall,
 refreshSession(moodleOrigin) {
  if (refreshPromise) return refreshPromise;
  refreshPromise = (async () => {
@@ -61,7 +65,9 @@ async api(path, options = {}) {
  const data = await response.json().catch(() => null);
  if (!response.ok) {
   const detail = data?.detail;
-  throw new Error(response.status === 503 ? 'Сервіс ще не налаштований. Спробуй гостьовий простір.' : response.status === 401 ? 'Сесія завершилася. Увійди ще раз.' : typeof detail === 'string' ? detail : 'Не вдалося виконати дію. Спробуй ще раз.');
+  const err = new Error(response.status === 503 ? 'Сервіс ще не налаштований. Спробуй гостьовий простір.' : response.status === 401 ? 'Сесія завершилася. Увійди ще раз.' : typeof detail === 'string' ? detail : 'Не вдалося виконати дію. Спробуй ще раз.');
+  err.status = response.status;
+  throw err;
  }
  return data;
 },

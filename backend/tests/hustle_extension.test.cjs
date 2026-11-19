@@ -65,6 +65,7 @@ test('connect does not loop Moodle login tabs on upstream 502 and SYNC_COURSE st
  h.ctx.fetch=async(url)=>{
   h.requests.push({url});
   if(url.endsWith('/extension-pair'))return {ok:false,status:502,json:async()=>({detail:'Upstream 403'})};
+  if(url==='https://learn.ucu.edu.ua/my/')return {ok:true,status:200,url,text:async()=>'<html><script>M={"sesskey":"k1"}</script></html>'};
   if(url.endsWith('/session'))return {ok:true,status:200,json:async()=>({workspace_token:'ws',auth_mode:'moodle'})};
   if(url.endsWith('/extension'))return {ok:true,status:200,json:async()=>({workspace_url:'/custom/courses/17',summary:{course_id:17}})};
   return {ok:true,status:200,json:async()=>({})};
@@ -73,4 +74,39 @@ test('connect does not loop Moodle login tabs on upstream 502 and SYNC_COURSE st
  assert.equal(conn.success,false);assert.equal(conn.status,502);assert.equal(h.opened.length,0);
  const sync=await h.send({type:'SYNC_COURSE',payload:{moodle_url:'https://learn.ucu.edu.ua',course_id:17,sections:[]}});
  assert.equal(sync.success,true);
+});
+test('extension relays /my/, courses, and course HTML when server gets 502 from Cloudflare',async()=>{
+ const h=harness();h.hooks.cookie={value:'fake-cookie'};
+ let pairCalls=0;
+ h.ctx.fetch=async(url,options)=>{
+  h.requests.push({url,options});
+  if(url.endsWith('/extension-pair')){
+   pairCalls++;
+   if(pairCalls===1)return {ok:false,status:502,json:async()=>({detail:'Upstream 403'})};
+   const body=JSON.parse(options.body);
+   assert.ok(body.browser_my_html.includes('sesskey'));
+   return {ok:true,status:200,json:async()=>({success:true,moodle_paired:true})};
+  }
+  if(url==='https://learn.ucu.edu.ua/my/'){
+   return {ok:true,status:200,url,text:async()=>'<html><script>M={"sesskey":"abc123"}</script><a href="/user/profile.php?id=7">Student</a></html>'};
+  }
+  if(url.includes('/lib/ajax/service.php')){
+   return {ok:true,status:200,json:async()=>[{error:false,data:{courses:[{id:42,fullname:'Алгоритми',shortname:'ALG'}]}}]};
+  }
+  if(url==='https://learn.ucu.edu.ua/course/view.php?id=42'){
+   return {ok:true,status:200,url,text:async()=>'<html><li id="section-1"><h3 class="sectionname">Тема 1</h3></li></html>'};
+  }
+  if(url.endsWith('/sync-moodle')){
+   const body=JSON.parse(options.body);
+   assert.ok(body.course_html.includes('Тема 1'));
+   return {ok:true,status:200,json:async()=>({success:true,course_id:42})};
+  }
+  return {ok:true,status:200,json:async()=>({})};
+ };
+ const conn=await h.send({type:'HUSTLE_CONNECT',moodleOrigin:'https://learn.ucu.edu.ua'},{url:'http://127.0.0.1:8000/hustle/connect.html',tab:{id:1}});
+ assert.equal(conn.success,true);assert.equal(conn.paired,true);
+ const courses=await h.send({type:'HUSTLE_MOODLE_COURSES',moodleOrigin:'https://learn.ucu.edu.ua'},{url:'http://127.0.0.1:8000/prototype/app.html',tab:{id:1}});
+ assert.equal(courses.success,true);assert.equal(courses.courses[0].id,42);
+ const synced=await h.send({type:'HUSTLE_MOODLE_SYNC_COURSE',moodleOrigin:'https://learn.ucu.edu.ua',courseId:42,courseTitle:'Алгоритми',shortname:'ALG'},{url:'http://127.0.0.1:8000/prototype/app.html',tab:{id:1}});
+ assert.equal(synced.success,true);
 });

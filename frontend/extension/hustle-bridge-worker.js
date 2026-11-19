@@ -18,20 +18,27 @@ function portalFromSender(sender) {
   } catch {return null;}
 }
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
-  if(message?.type!=='HUSTLE_CONNECT' && message?.type!=='HUSTLE_REFRESH_SESSION')return false;
+  const allowed=['HUSTLE_CONNECT','HUSTLE_REFRESH_SESSION','HUSTLE_MOODLE_COURSES','HUSTLE_MOODLE_SYNC_COURSE'];
+  if(!allowed.includes(message?.type))return false;
   const portal=portalFromSender(sender);
   if(!portal)return false;
-  if(message.type==='HUSTLE_REFRESH_SESSION') {
+  if(message.type==='HUSTLE_REFRESH_SESSION' || message.type==='HUSTLE_MOODLE_COURSES' || message.type==='HUSTLE_MOODLE_SYNC_COURSE') {
     (async()=>{
       try {
         const stored=await chrome.storage.local.get(['hustleConnections']);
         const conns=stored.hustleConnections||{};
         let target=message.moodleOrigin?extractMoodleOrigin(message.moodleOrigin):null;
         if(!target)target=Object.keys(conns).find(origin=>conns[origin]===portal)||null;
-        if(!target || conns[target]!==portal){sendResponse({success:false,paired:false,requiresConnection:true});return;}
-        const result=await syncCookieForUrl(target,portal,true);
-        sendResponse({success:Boolean(result.success),paired:Boolean(result.success),status:result.status,needsLogin:Boolean(result.needsLogin),error:result.error});
-      } catch {sendResponse({success:false,paired:false});}
+        if(!target || conns[target]!==portal){sendResponse({success:false,paired:false,requiresConnection:true,error:'Спершу підключи Moodle.'});return;}
+        if(message.type==='HUSTLE_REFRESH_SESSION') {
+          const result=await syncCookieForUrl(target,portal,true);
+          sendResponse({success:Boolean(result.success),paired:Boolean(result.success),status:result.status,needsLogin:Boolean(result.needsLogin),error:result.error});
+        } else if(message.type==='HUSTLE_MOODLE_COURSES') {
+          sendResponse(await fetchCoursesViaBrowser(target));
+        } else {
+          sendResponse(await syncCourseViaBrowser(target,portal,message.courseId,message.courseTitle,message.shortname));
+        }
+      } catch (err) {sendResponse({success:false,paired:false,error:err?.message||'Помилка розширення.'});}
     })();
     return true;
   }

@@ -48,7 +48,19 @@ window.createMoodlePicker = function ({courseListUrl, onProgress, onImported, on
     const ticket = ++request;
     element.innerHTML = '<p class="picker-message" role="status">Завантажуємо курси…</p>';
     try {
-      const [list, existing] = await Promise.all([UI.api('/api/courses'), UI.api(courseListUrl)]);
+      const existing = await UI.api(courseListUrl);
+      let list;
+      try {
+        list = await UI.api('/api/courses');
+      } catch (coursesErr) {
+        if (coursesErr.status === 502 && UI.extensionCall) {
+          const extCourses = await UI.extensionCall('MOODLE_COURSES', {}, 15000);
+          if (extCourses?.success && Array.isArray(extCourses.courses)) list = extCourses.courses;
+          else throw new Error(extCourses?.error || coursesErr.message);
+        } else {
+          throw coursesErr;
+        }
+      }
       if (ticket !== request) return;
       courses = list.map(c => ({id: Number(c.id), fullname: UI.courseName(c.fullname), shortname: UI.courseName(c.shortname)}));
       added = new Set(existing.map(c => Number(c.course_id)));
@@ -101,7 +113,16 @@ window.createMoodlePicker = function ({courseListUrl, onProgress, onImported, on
       batch.failures.delete(course.id);
       updateProgress();
       try {
-        await UI.post('/api/workspace/courses/' + course.id + '/sync-moodle', {course_title: course.fullname, shortname: course.shortname});
+        try {
+          await UI.post('/api/workspace/courses/' + course.id + '/sync-moodle', {course_title: course.fullname, shortname: course.shortname});
+        } catch (syncErr) {
+          if (syncErr.status === 502 && UI.extensionCall) {
+            const extSync = await UI.extensionCall('MOODLE_SYNC_COURSE', {courseId: course.id, courseTitle: course.fullname, shortname: course.shortname}, 30000);
+            if (!extSync?.success) throw new Error(extSync?.error || syncErr.message);
+          } else {
+            throw syncErr;
+          }
+        }
         batch.done.add(course.id);
         batch.statuses.set(course.id, 'Додано');
       } catch (err) {

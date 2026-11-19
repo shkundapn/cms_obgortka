@@ -216,3 +216,46 @@ def test_sliding_session_refresh_and_upstream_403_status(monkeypatch):
     assert courses_res.status_code == 401
 
 
+def test_browser_relayed_pairing_and_course_html_sync_when_server_blocked(monkeypatch):
+    from app.core.exceptions import MoodleAuthError
+    from app.services.moodle_client import MoodleClient
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "MOODLE_MOCK_MODE", False)
+
+    async def blocked_cookie(self, **kwargs):
+        raise MoodleAuthError("Moodle returned HTTP 403", error_code="upstream_blocked")
+
+    monkeypatch.setattr(MoodleClient, "authenticate_with_cookie", blocked_cookie)
+
+    my_html = (
+        '<html><span class="usertext">Олена Студентка</span>'
+        '<a href="https://learn.ucu.edu.ua/user/profile.php?id=777">Профіль</a>'
+        '<script>var cfg={"sesskey":"xyz789"};</script></html>'
+    )
+    c = TestClient(app)
+    paired = c.post(
+        "/api/auth/extension-pair",
+        json={"moodle_url": "https://learn.ucu.edu.ua", "cookie": "real_cookie_val", "browser_my_html": my_html},
+    )
+    assert paired.status_code == 200
+    assert paired.json()["moodle_paired"] is True
+    assert paired.json()["moodle_user_id"] == 777
+
+    course_html = (
+        '<html><body><ul>'
+        '<li id="section-1"><h3 class="sectionname">Тема 1: Графи</h3>'
+        '<a href="https://learn.ucu.edu.ua/mod/page/view.php?id=301">Вступ до графів</a>'
+        '</li></ul></body></html>'
+    )
+    sync_res = c.post(
+        "/api/workspace/courses/888/sync-moodle",
+        json={"course_title": "Алгоритми", "shortname": "ALG", "course_html": course_html, "fetch_files": False},
+    )
+    assert sync_res.status_code == 200
+    bundle = c.get("/api/workspace/courses/888")
+    assert bundle.status_code == 200
+    assert bundle.json()["course"]["title"] == "Алгоритми"
+    assert bundle.json()["sections"][0]["name"] == "Тема 1: Графи"
+
+

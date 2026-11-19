@@ -322,7 +322,7 @@
   function studyShortcuts(course) {
     const route = '#course/' + encodeURIComponent(course.id);
     return `<nav class="study-shortcuts" aria-label="Швидкі дії предмета">
-      <a class="study-shortcut study-shortcut--materials" href="${route}/materials">
+      <a class="study-shortcut study-shortcut--materials" href="${route}/materials" hidden>
         <span class="study-shortcut-icon" aria-hidden="true">${icon('files')}</span>
         <strong>Матеріали курсу</strong><span class="study-shortcut-arrow" aria-hidden="true">${icon('arrow')}</span>
       </a>

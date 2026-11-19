@@ -279,4 +279,36 @@ def test_browser_relayed_pairing_and_course_html_sync_when_server_blocked(monkey
     assert "Додатковий опис сторінки" in snap_text
     assert "Граф складається з вершин та ребер." in snap_text
 
+    grade_html = (
+        '<html><table class="user-grade"><tbody>'
+        '<tr><th class="column-itemname"><a href="/mod/assign/view.php?id=301">Лабораторна 1</a></th>'
+        '<td class="column-grade">95.00</td><td class="column-range">0–100</td><td class="column-percentage">95.00 %</td></tr>'
+        '</tbody></table></html>'
+    )
+    grades_res = c.post(
+        "/api/grades/from-browser",
+        json={"courses": [{"course_id": 888, "course_fullname": "Алгоритми", "report_html": grade_html}]},
+    )
+    assert grades_res.status_code == 200
+    g_courses = grades_res.json()["courses"]
+    assert len(g_courses) == 1
+    assert g_courses[0]["course_id"] == 888
+    assert g_courses[0]["grade_items"][0]["itemname"] == "Лабораторна 1"
+    assert g_courses[0]["grade_items"][0]["gradeformatted"] == "95.00"
+
+    updated_course_html = (
+        '<html><body><ul>'
+        '<li id="section-1" class="section"><h3 class="sectionname">Лекція</h3>'
+        '<a href="https://learn.ucu.edu.ua/mod/page/view.php?id=301">Вступ до графів</a>'
+        '<a href="https://learn.ucu.edu.ua/mod/page/view.php?id=302">Дерева пошуку</a>'
+        '</li></ul></body></html>'
+    )
+    upd_res = c.post(
+        "/api/workspace/courses/888/check-updates?force=true",
+        json={"course_html": updated_course_html},
+    )
+    assert upd_res.status_code == 200
+    assert upd_res.json()["checked"] is True
+    assert not upd_res.json().get("upstream_blocked")
+
 

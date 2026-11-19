@@ -18,11 +18,11 @@ function portalFromSender(sender) {
   } catch {return null;}
 }
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
-  const allowed=['HUSTLE_CONNECT','HUSTLE_REFRESH_SESSION','HUSTLE_MOODLE_COURSES','HUSTLE_MOODLE_SYNC_COURSE'];
+  const allowed=['HUSTLE_CONNECT','HUSTLE_REFRESH_SESSION','HUSTLE_MOODLE_COURSES','HUSTLE_MOODLE_SYNC_COURSE','HUSTLE_MOODLE_ASSIGNMENTS','HUSTLE_MOODLE_GRADES','HUSTLE_MOODLE_CHECK_UPDATES'];
   if(!allowed.includes(message?.type))return false;
   const portal=portalFromSender(sender);
   if(!portal)return false;
-  if(message.type==='HUSTLE_REFRESH_SESSION' || message.type==='HUSTLE_MOODLE_COURSES' || message.type==='HUSTLE_MOODLE_SYNC_COURSE') {
+  if(message.type!=='HUSTLE_CONNECT') {
     (async()=>{
       try {
         const stored=await chrome.storage.local.get(['hustleConnections']);
@@ -35,8 +35,14 @@ chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
           sendResponse({success:Boolean(result.success),paired:Boolean(result.success),status:result.status,needsLogin:Boolean(result.needsLogin),error:result.error});
         } else if(message.type==='HUSTLE_MOODLE_COURSES') {
           sendResponse(await fetchCoursesViaBrowser(target));
-        } else {
+        } else if(message.type==='HUSTLE_MOODLE_SYNC_COURSE') {
           sendResponse(await syncCourseViaBrowser(target,portal,message.courseId,message.courseTitle,message.shortname));
+        } else if(message.type==='HUSTLE_MOODLE_ASSIGNMENTS') {
+          sendResponse(await fetchAssignmentsViaBrowser(target,message.courseId||null));
+        } else if(message.type==='HUSTLE_MOODLE_GRADES') {
+          sendResponse(await fetchGradesViaBrowser(target,portal,message.courseId||null));
+        } else {
+          sendResponse(await checkUpdatesViaBrowser(target,portal,message.courseId,message.force!==false));
         }
       } catch (err) {sendResponse({success:false,paired:false,error:err?.message||'Помилка розширення.'});}
     })();

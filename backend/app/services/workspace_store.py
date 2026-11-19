@@ -1973,6 +1973,7 @@ class WorkspaceStore:
         moodle_client: Optional[Any] = None,
         session: Optional[Dict[str, Any]] = None,
         force: bool = False,
+        fresh_sections_override: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Automatic course updater with 1-minute debounce:
@@ -2015,8 +2016,10 @@ class WorkspaceStore:
 
         if bundle["course"].source_type == "manual_upload":
             return {"checked": False, "has_updates": False, "message": "Курс містить власні матеріали."}
-        fresh_sections = None
-        if moodle_client and session and session.get("moodle_token"):
+        fresh_sections = fresh_sections_override
+        if fresh_sections is not None:
+            pass
+        elif moodle_client and session and session.get("moodle_token"):
             # Retrieve fresh contents from Moodle
             try:
                 fresh_sections = await moodle_client.get_course_contents(
@@ -2028,7 +2031,8 @@ class WorkspaceStore:
                 )
             except Exception as exc:
                 logger.warning(f"Failed to fetch Moodle course contents for update check: {exc}")
-                return {"checked": False, "error": str(exc)}
+                blocked = getattr(exc, "error_code", None) == "upstream_blocked" or "403" in str(exc)
+                return {"checked": False, "error": str(exc), "upstream_blocked": blocked}
         elif get_settings().MOODLE_MOCK_MODE and bundle["course"].source_type != "manual_upload":
             from app.services.mock_data import MOCK_COURSE_CONTENTS
             fresh_sections = MOCK_COURSE_CONTENTS.get(course_id)

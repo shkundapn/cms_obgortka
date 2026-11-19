@@ -460,6 +460,186 @@ async function syncCourseViaBrowser(moodleOrigin, portalUrl, courseId, courseTit
   return { success: true, data };
 }
 
+async function getMoodleContext(moodleOrigin) {
+  const myRes = await fetch(`${moodleOrigin}/my/`, { credentials: 'include' });
+  const myHtml = await myRes.text().catch(() => '');
+  const isLogin = (myRes.url && myRes.url.includes('/login/')) ||
+    (myHtml.includes('name="username"') && myHtml.includes('name="password"'));
+  if (!myRes.ok || isLogin || !myHtml) {
+    return { ok: false, status: 401, needsLogin: true, error: 'Увійди в Moodle повторно.' };
+  }
+  const sessMatch = myHtml.match(/"sesskey":"([a-zA-Z0-9]+)"/) || myHtml.match(/sesskey=([a-zA-Z0-9]+)/);
+  const uidMatch = myHtml.match(/\/user\/profile\.php\?id=(\d+)/)
+    || myHtml.match(/"userId":\s*(\d+)/)
+    || myHtml.match(/"userid":\s*(\d+)/)
+    || myHtml.match(/data-userid="(\d+)"/);
+  return {
+    ok: true,
+    sesskey: sessMatch ? sessMatch[1] : '',
+    userId: uidMatch ? Number(uidMatch[1]) : 0,
+    myHtml,
+  };
+}
+
+async function callMoodleAjax(moodleOrigin, sesskey, methodname, args) {
+  if (!sesskey) return null;
+  const res = await fetch(
+    `${moodleOrigin}/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=${encodeURIComponent(methodname)}`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([{ index: 0, methodname, args }]),
+    }
+  );
+  if (!res.ok) return null;
+  const payload = await res.json().catch(() => null);
+  if (Array.isArray(payload) && payload[0] && !payload[0].error) {
+    return payload[0].data;
+  }
+  return null;
+}
+
+async function fetchAssignmentsViaBrowser(moodleOrigin, courseId = null) {
+  const ctx = await getMoodleContext(moodleOrigin);
+  if (!ctx.ok) return { success: false, status: ctx.status, needsLogin: ctx.needsLogin, error: ctx.error };
+
+  let events = [];
+  if (courseId) {
+    const data = await callMoodleAjax(moodleOrigin, ctx.sesskey, 'core_calendar_get_action_events_by_course', {
+      courseid: Number(courseId),
+      timesortfrom: 0,
+      limitnum: 50,
+    });
+    if (Array.isArray(data?.events)) events = data.events;
+  } else {
+    const recentFrom = Math.max(0, Math.floor(Date.now() / 1000) - 30 * 86400);
+    const [recentData, allData] = await Promise.all([
+      callMoodleAjax(moodleOrigin, ctx.sesskey, 'core_calendar_get_action_events_by_timesort', {
+        timesortfrom: recentFrom,
+        limitnum: 50,
+      }),
+      callMoodleAjax(moodleOrigin, ctx.sesskey, 'core_calendar_get_action_events_by_timesort', {
+        timesortfrom: 0,
+        limitnum: 50,
+      }),
+    ]);
+    const seen = new Set();
+    for (const batch of [recentData?.events || [], allData?.events || []]) {
+      for (const ev of batch) {
+        const cid = Number(ev.course?.id || 0);
+        const key = `${cid}:${ev.id || ev.instance || ev.name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        events.push(ev);
+      }
+    }
+  }
+
+  const assignments = events.map((ev) => {
+    const modname = ev.modulename || 'assign';
+    const rawId = Number(ev.instance || ev.id || 0);
+    let cmid = Number(ev.cmid || 0);
+    if (!cmid && ev.url) {
+      const m = String(ev.url).match(/[?&]id=(\d+)/);
+      if (m) cmid = Number(m[1]);
+    }
+    return {
+      id: rawId,
+      cmid: cmid || rawId,
+      course_id: Number(ev.course?.id || courseId || 0),
+      course_name: ev.course?.fullname || '',
+      name: ev.name || ev.activityname || 'Завдання',
+      duedate: Number(ev.timesort || ev.timestart || 0) || null,
+      allowsubmissionsfromdate: null,
+      intro: ev.description ? stripHtmlText(ev.description) : '',
+      modulename: modname,
+    };
+  });
+
+  return { success: true, total: assignments.length, assignments };
+}
+
+async function fetchGradesViaBrowser(moodleOrigin, portalUrl, courseId = null) {
+  const ctx = await getMoodleContext(moodleOrigin);
+  if (!ctx.ok) return { success: false, status: ctx.status, needsLogin: ctx.needsLogin, error: ctx.error };
+
+  let targets = [];
+  if (courseId) {
+    targets = [{ id: Number(courseId), fullname: `Course #${courseId}` }];
+  } else {
+    const cRes = await fetchCoursesViaBrowser(moodleOrigin);
+    targets = (cRes.courses || []).slice(0, 12);
+  }
+
+  const payloadCourses = [];
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(4, Math.max(1, targets.length)) }, async () => {
+    while (cursor < targets.length) {
+      const c = targets[cursor++];
+      const cid = Number(c.id);
+      let ajaxItems = null;
+      if (ctx.sesskey && ctx.userId) {
+        const gData = await callMoodleAjax(moodleOrigin, ctx.sesskey, 'gradereport_user_get_grade_items', {
+          courseid: cid,
+          userid: ctx.userId,
+        });
+        if (Array.isArray(gData?.usergrades) && gData.usergrades[0]?.gradeitems) {
+          ajaxItems = gData.usergrades[0].gradeitems;
+        }
+      }
+      if (ajaxItems) {
+        payloadCourses.push({ course_id: cid, course_fullname: c.fullname || `Course #${cid}`, grade_items: ajaxItems });
+        continue;
+      }
+      try {
+        const gRes = await fetch(`${moodleOrigin}/grade/report/user/index.php?id=${cid}`, { credentials: 'include' });
+        const gHtml = await gRes.text().catch(() => '');
+        if (gRes.ok && gHtml) {
+          payloadCourses.push({ course_id: cid, course_fullname: c.fullname || `Course #${cid}`, report_html: gHtml.slice(0, 600000) });
+        }
+      } catch {}
+    }
+  });
+  await Promise.all(workers);
+
+  const res = await fetch(`${portalUrl}/api/grades/from-browser`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ courses: payloadCourses }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { success: false, status: res.status, error: data.detail || `HTTP ${res.status}` };
+  }
+  return { success: true, courses: data.courses || [] };
+}
+
+async function checkUpdatesViaBrowser(moodleOrigin, portalUrl, courseId, force = true) {
+  const courseRes = await fetch(`${moodleOrigin}/course/view.php?id=${Number(courseId)}`, { credentials: 'include' });
+  const courseHtml = await courseRes.text().catch(() => '');
+  const isLogin = (courseRes.url && courseRes.url.includes('/login/')) ||
+    (courseHtml.includes('name="username"') && courseHtml.includes('name="password"'));
+  if (!courseRes.ok || isLogin || !courseHtml) {
+    return { success: false, status: 401, needsLogin: true, error: 'Не вдалося перевірити оновлення в Moodle.' };
+  }
+  const res = await fetch(
+    `${portalUrl}/api/workspace/courses/${Number(courseId)}/check-updates?force=${force ? 'true' : 'false'}`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ course_html: courseHtml.slice(0, 1800000) }),
+    }
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { success: false, status: res.status, error: data.detail || `HTTP ${res.status}` };
+  }
+  return { success: true, data };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || !message.type) return false;
 

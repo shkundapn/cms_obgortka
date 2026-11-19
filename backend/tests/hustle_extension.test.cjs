@@ -115,3 +115,45 @@ test('extension relays /my/, courses, and course HTML when server gets 502 from 
  const synced=await h.send({type:'HUSTLE_MOODLE_SYNC_COURSE',moodleOrigin:'https://learn.ucu.edu.ua',courseId:42,courseTitle:'Алгоритми',shortname:'ALG'},{url:'http://127.0.0.1:8000/prototype/app.html',tab:{id:1}});
  assert.equal(synced.success,true);
 });
+test('extension relays assignments, grades, and course update checks from browser',async()=>{
+ const h=harness();h.hooks.cookie={value:'fake-cookie'};
+ h.ctx.fetch=async(url,options)=>{
+  h.requests.push({url,options});
+  if(url.endsWith('/extension-pair'))return {ok:true,status:200,json:async()=>({success:true,moodle_paired:true})};
+  if(url==='https://learn.ucu.edu.ua/my/'){
+   return {ok:true,status:200,url,text:async()=>'<html><script>M={"sesskey":"abc123"}</script><a href="/user/profile.php?id=7">Student</a></html>'};
+  }
+  if(url.includes('/lib/ajax/service.php')){
+   const payload=JSON.parse(options.body||'[]');
+   if(payload[0]?.methodname==='core_calendar_get_action_events_by_timesort'||payload[0]?.methodname==='core_calendar_get_action_events_by_course'){
+    return {ok:true,status:200,json:async()=>[{error:false,data:{events:[{id:501,name:'Lab 1',course:{id:42,fullname:'Алгоритми'},timesort:1800000000,modulename:'assign',instance:77,url:'https://learn.ucu.edu.ua/mod/assign/view.php?id=77',action:{name:'Submit',url:'https://learn.ucu.edu.ua/mod/assign/view.php?id=77'}}]}}]};
+   }
+   return {ok:true,status:200,json:async()=>[{error:false,data:{courses:[{id:42,fullname:'Алгоритми',shortname:'ALG'}]}}]};
+  }
+  if(url==='https://learn.ucu.edu.ua/grade/report/user/index.php?id=42'){
+   return {ok:true,status:200,url,text:async()=>'<html><table class="user-grade"><tr><th class="column-itemname">Lab 1</th><td class="column-grade">95.00</td></tr></table></html>'};
+  }
+  if(url.endsWith('/api/grades/from-browser')){
+   const body=JSON.parse(options.body);
+   assert.equal(body.courses[0].course_id,42);
+   assert.ok(body.courses[0].report_html.includes('Lab 1'));
+   return {ok:true,status:200,json:async()=>({courses:[{course_id:42,course_fullname:'Алгоритми',grade_items:[{itemname:'Lab 1',gradeformatted:'95.00'}]}]})};
+  }
+  if(url==='https://learn.ucu.edu.ua/course/view.php?id=42'){
+   return {ok:true,status:200,url,text:async()=>'<html><li id="section-1"><h3 class="sectionname">Тема 1</h3><a href="/mod/page/view.php?id=99">Сторінка 1</a></li></html>'};
+  }
+  if(url.includes('/api/workspace/courses/42/check-updates')){
+   const body=JSON.parse(options.body);
+   assert.ok(body.course_html.includes('Тема 1'));
+   return {ok:true,status:200,json:async()=>({has_updates:true,new_modules_count:1,message:'Оновлено'})};
+  }
+  return {ok:true,status:200,json:async()=>({})};
+ };
+ await h.send({type:'HUSTLE_CONNECT',moodleOrigin:'https://learn.ucu.edu.ua'},{url:'http://127.0.0.1:8000/hustle/connect.html',tab:{id:1}});
+ const assign=await h.send({type:'HUSTLE_MOODLE_ASSIGNMENTS',moodleOrigin:'https://learn.ucu.edu.ua',courseId:42},{url:'http://127.0.0.1:8000/hustle/app.html',tab:{id:1}});
+ assert.equal(assign.success,true);assert.equal(assign.total,1);assert.equal(assign.assignments[0].name,'Lab 1');
+ const grades=await h.send({type:'HUSTLE_MOODLE_GRADES',moodleOrigin:'https://learn.ucu.edu.ua',courseId:42},{url:'http://127.0.0.1:8000/hustle/app.html',tab:{id:1}});
+ assert.equal(grades.success,true);assert.equal(grades.courses[0].grade_items[0].itemname,'Lab 1');
+ const upd=await h.send({type:'HUSTLE_MOODLE_CHECK_UPDATES',moodleOrigin:'https://learn.ucu.edu.ua',courseId:42},{url:'http://127.0.0.1:8000/hustle/app.html',tab:{id:1}});
+ assert.equal(upd.success,true);assert.equal(upd.data.has_updates,true);
+});

@@ -1154,11 +1154,16 @@ async def get_workspace_course(
     }
 
 
+class CheckUpdatesRequest(BaseModel):
+    course_html: Optional[str] = None
+
+
 @router.post("/api/workspace/courses/{course_id}/check-updates")
 async def check_course_updates(
     course_id: int,
     request: Request,
     force: bool = Query(default=False),
+    req: Optional[CheckUpdatesRequest] = None,
     owner: WorkspaceOwner = Depends(get_workspace_owner),
 ) -> Dict[str, Any]:
     """Explicitly check Moodle upstream for new/updated course materials and map them to weekly syllabus topics."""
@@ -1166,12 +1171,18 @@ async def check_course_updates(
     session = get_optional_moodle_session(request)
     client = MoodleClient(base_url=session.get("site_url")) if session and session.get("site_url") else None
 
+    fresh_sections_override = None
+    if req and req.course_html and req.course_html.strip():
+        parser_client = client or MoodleClient(base_url=get_settings().MOODLE_BASE_URL)
+        fresh_sections_override = parser_client.parse_course_page_html(req.course_html)
+
     result = await store.check_and_apply_course_updates(
         course_id=course_id,
         owner_id=owner.owner_id,
         moodle_client=client,
         session=session,
         force=force,
+        fresh_sections_override=fresh_sections_override,
     )
     return result
 

@@ -54,6 +54,28 @@ refreshSession(moodleOrigin) {
  })();
  return refreshPromise;
 },
+async fallbackViaExtension(path) {
+ const raw = String(path || '');
+ if (raw.startsWith('/api/assignments/submission-status')) return { statuses: {} };
+ if (raw.startsWith('/api/assignments')) {
+  const q = raw.includes('?') ? new URLSearchParams(raw.split('?')[1]) : null;
+  const courseId = q?.get('course_id') ? Number(q.get('course_id')) : null;
+  const res = await extensionCall('MOODLE_ASSIGNMENTS', { courseId }, 15000);
+  if (res?.success) return { total: res.total ?? res.assignments?.length ?? 0, assignments: res.assignments || [] };
+ }
+ if (raw.startsWith('/api/grades') && !raw.startsWith('/api/grades/from-browser')) {
+  const q = raw.includes('?') ? new URLSearchParams(raw.split('?')[1]) : null;
+  const courseId = q?.get('course_id') ? Number(q.get('course_id')) : null;
+  const res = await extensionCall('MOODLE_GRADES', { courseId }, 20000);
+  if (res?.success) return { courses: res.courses || [] };
+ }
+ const checkMatch = raw.match(/^\/api\/workspace\/courses\/(\d+)\/check-updates/);
+ if (checkMatch) {
+  const res = await extensionCall('MOODLE_CHECK_UPDATES', { courseId: Number(checkMatch[1]), force: true }, 15000);
+  if (res?.success && res.data) return res.data;
+ }
+ return null;
+},
 async api(path, options = {}) {
  const { _retried, ...fetchOptions } = options;
  let response = await fetch(path, {credentials:'same-origin', ...fetchOptions});
@@ -61,6 +83,10 @@ async api(path, options = {}) {
   if (await this.refreshSession()) {
    response = await fetch(path, {credentials:'same-origin', ...fetchOptions});
   }
+ }
+ if (response.status === 502) {
+  const extData = await this.fallbackViaExtension(path).catch(() => null);
+  if (extData !== null) return extData;
  }
  const data = await response.json().catch(() => null);
  if (!response.ok) {

@@ -110,6 +110,22 @@ class VideoConceptAnchor(BaseModel):
     summary: str = ""
 
 
+class PracticeQuestion(BaseModel):
+    """Synthetic practice question generated from lecture content (never scraped exam items)."""
+
+    question: str
+    options: List[str] = Field(min_length=2)
+    correct_index: int = Field(ge=0)
+    explanation: str
+    topic_ref: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_correct_index(self) -> "PracticeQuestion":
+        if self.correct_index >= len(self.options):
+            raise ValueError("correct_index must be within options range.")
+        return self
+
+
 class InteractiveBookSection(BaseModel):
     """Structured interactive textbook module with video concepts, self-tests, and AI tutor check."""
 
@@ -128,22 +144,6 @@ class InteractiveBookSection(BaseModel):
     visual_card_caption: Optional[str] = None
     visual_card_prompt: Optional[str] = None
     visual_card_url: Optional[str] = None
-
-
-class PracticeQuestion(BaseModel):
-    """Synthetic practice question generated from lecture content (never scraped exam items)."""
-
-    question: str
-    options: List[str] = Field(min_length=2)
-    correct_index: int = Field(ge=0)
-    explanation: str
-    topic_ref: Optional[str] = None
-
-    @model_validator(mode="after")
-    def validate_correct_index(self) -> "PracticeQuestion":
-        if self.correct_index >= len(self.options):
-            raise ValueError("correct_index must be within options range.")
-        return self
 
 
 class Flashcard(BaseModel):

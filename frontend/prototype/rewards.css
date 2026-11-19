@@ -110,6 +110,26 @@
 .reward-donkey > span { position: absolute; z-index: 2; right: 0; bottom: 0; display: grid; place-items: center; width: 1.15rem; height: 1.15rem; border: 1px solid #d4aa5a; border-radius: 50%; background: #fae8bb; color: #705024; font-size: .78rem; }
 .reward-donkey:disabled > span { display: none; }
 .reward-course-find { display: flex; align-items: center; justify-content: flex-end; gap: .6rem; }
+.reward-course-find--shelf { margin-block-start: .85rem; padding-inline-end: .45rem; }
+.reward-donkey--scene { width: clamp(3.75rem, 6.5vw, 4.65rem); }
+.reward-donkey--route { width: clamp(4.25rem, 7vw, 5rem); }
+.reward-donkey--scene img, .reward-donkey--route img {
+  rotate: var(--donkey-tilt, -7deg);
+  filter: drop-shadow(0 .16rem .12rem #432e3d2e);
+}
+.reward-donkey--scene:is([data-reward-find="paper-plane"], [data-reward-find="card-trick"], [data-reward-find="headphones"]) { --donkey-tilt: 8deg; }
+.reward-donkey--scene:not([aria-disabled="true"]) { cursor: pointer; }
+.reward-donkey--scene[aria-disabled="true"] { cursor: default; background: transparent; }
+.reward-donkey--scene > span { width: .95rem; height: .95rem; font-size: .64rem; }
+.reward-donkey[data-reward-collected] > span { border-color: #b3c6a3; background: #e4efdb; color: #3e603c; }
+.reward-scene-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.reward-decks-heading { margin-block-end: .7rem; }
+.reward-goal-row { margin-block-end: 1rem; }
+.reward-goal-row .paper-goal { flex-wrap: wrap; margin: 0; }
+.calendar-legend:has(> .reward-donkey), .materials-heading:has(> .reward-donkey) { align-items: center; }
+.calendar-legend > .reward-donkey { order: 1; margin-inline-start: auto; }
+.materials-heading > .reward-donkey { margin-inline-end: auto; }
+.pomodoro-card .panel-title:has(> .reward-donkey) > span { margin-inline-start: auto; }
 .reward-find-note { color: #45624b; font-size: .875rem; font-weight: 750; }
 .reward-donkey.mascot-sticker + .reward-find-note { display: block; margin-block: .4rem; }
 .reward-exercise-result:not(:empty) { width: fit-content; margin: .5rem auto 1rem; padding: .45rem .7rem; border-radius: .65rem; background: #ede0f3; color: #503257; font-size: .9rem; font-weight: 800; }
@@ -144,6 +164,7 @@
 .reward-item-actions > strong { color: #513752; font-size: .8125rem; }
 .reward-album-summary { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-bottom: .85rem; padding: .9rem; border-radius: .7rem; background: #f0e4f3; color: #4d3253; }
 .reward-album-summary span { font-size: .875rem; }
+.reward-album-summary p { flex-basis: 100%; margin: 0; color: #5f4264; font-size: .875rem; }
 @media (min-width: 75rem) {
   .reward-album-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }

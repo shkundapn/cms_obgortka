@@ -224,10 +224,10 @@
     const title = showHeading ? `<div class="panel-title"><h2>Мої предмети</h2><a href="#courses">Усі предмети ${icon('arrow')}</a></div>` : '';
     return `<div class="subjects-section">${title}<div class="subject-grid">${cards}</div></div>`;
   }
-  function timerCard(courseInputId = 'timer-course') {
+  function timerCard(courseInputId = 'timer-course', sticker = '') {
     const t = state.timer, phase = timerPhase(t);
     return `<section class="dash-panel pomodoro-card" data-timer-state="${phase}" aria-label="Pomodoro">
-      <span class="paper-tape" aria-hidden="true"></span><div class="panel-title"><h2>${icon('clock')} Pomodoro</h2><span>${state.sessions.filter(s => s.day === today()).length} сьогодні</span></div>
+      <span class="paper-tape" aria-hidden="true"></span><div class="panel-title"><h2>${icon('clock')} Pomodoro</h2><span>${state.sessions.filter(s => s.day === today()).length} сьогодні</span>${sticker}</div>
       <div class="timer-modes" role="group" aria-label="Режим таймера">${[['focus', 'Фокус'], ['short', '5 хв'], ['long', '15 хв']].map(([mode, label]) =>
         `<button data-timer-mode="${mode}" aria-pressed="${t.mode === mode}">${label}</button>`).join('')}</div>
       <div class="timer-ring" data-timer-ring><div><strong data-timer-display role="timer" aria-label="Залишилось часу"></strong>
@@ -297,7 +297,7 @@
     return `<section class="dash-panel calendar-panel ${compact ? 'compact-calendar' : ''}">${compact ? `<div class="panel-title"><h2>Календар</h2><a href="#calendar" aria-label="Відкрити календар">${icon('arrow')}</a></div>${monthControls}` : `<div class="month-heading">${monthControls}<button class="calendar-today" data-calendar-today>Сьогодні</button></div>`}<div class="calendar-weekdays" aria-hidden="true">${['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'].map(d => `<span>${d}</span>`).join('')}</div><div class="calendar-grid" role="group" aria-label="Дні місяця">${days.map(day => {
       const due = H.calendar ? H.calendar.events(course?.id).filter(e => e.day === day) : demoCourses().filter(c => (!course || c.id === course.id) && tasks(c.id)[0].dueDay === day), planned = events.filter(t => t.scheduled === day), urgent = due.some(e => { const c = courseById(e.course || e.id); return c && hot(tasks(c.id)[0]) && !allDone(c); });
       return `<div class="calendar-cell" data-drop-day="${day}"><button data-calendar-date="${day}" aria-pressed="${selectedDate === day}" ${day === today() ? 'aria-current="date"' : ''} class="calendar-day ${day.slice(0, 7) !== month.slice(0, 7) ? 'other-month' : ''} ${urgent ? 'has-urgent' : ''}" aria-label="${dateText(day, { weekday: 'long', day: 'numeric', month: 'long' })}${due.length ? ', дедлайнів: ' + due.length : ''}${planned.length ? ', завдань: ' + planned.length : ''}"><span>${Number(day.slice(-2))}</span><div class="calendar-dots" aria-hidden="true">${due.map(() => '<i class="deadline-dot"></i>').join('')}${planned.length ? '<i></i>' : ''}</div></button>${!compact && H.calendar ? H.calendar.chips(day, course?.id) : ''}</div>`;
-    }).join('')}</div>${compact ? `<div class="mini-agenda"><strong>${dateText(selectedDate)}</strong>${agendaItems(selectedDate, course, true)}</div>` : '<div class="calendar-legend"><span><i></i> Заняття</span><span><i class="deadline-dot"></i> Дедлайн</span></div>'}</section>`;
+    }).join('')}</div>${compact ? `<div class="mini-agenda"><strong>${dateText(selectedDate)}</strong>${agendaItems(selectedDate, course, true)}</div>` : `<div class="calendar-legend"><span><i></i> Заняття</span><span><i class="deadline-dot"></i> Дедлайн</span>${rewards?.marker('pencil-race') || ''}</div>`}</section>`;
   }
   function agendaItems(day, course, compact = false) {
     const list = tasks(course?.id).filter(t => !t.course.connected && t.scheduled === day), deadlines = demoCourses().filter(c => (!course || c.id === course.id) && tasks(c.id)[0].dueDay === day);
@@ -387,11 +387,16 @@
     const list = tasks(course?.id).sort((a, b) => deadlineTimeOrder(a, b, now));
     const records = course ? `<a class="secondary" href="#course/${course.id}/submissions">Статус у Moodle →</a>` : '';
     const rows = deadlineList(list, !course);
-    const header = course ? H.workspace.courseHeader(course, 'assignments') + `<div class="paper-deadline-actions">${records}</div>` : heading('Дедлайни');
+    const header = course ? H.workspace.courseHeader(course, 'assignments') + `<div class="paper-deadline-actions">${records}</div>` : heading('Дедлайни', rewards?.marker('deadline', 'reward-donkey--scene'));
     return header + (H.workspace.notice() || '') +
       '<section class="dash-panel deadline-queue">' + (rows || '<p class="agenda-empty">Найближчих дедлайнів немає.</p>') + '</section>';
   }
-  function coursesView() { return heading('Мої предмети', H.workspace?.add || '<a class="secondary" href="connect.html?edit=1">Обрати предмети +</a>') + metrics() + (H.workspace ? H.workspace.notice() : H.liveCalendar?.coursesView() || '') + courseCards(false, true); }
+  function coursesView() {
+    const sticker = rewards?.marker('paper-plane');
+    return heading('Мої предмети', H.workspace?.add || '<a class="secondary" href="connect.html?edit=1">Обрати предмети +</a>')
+      + metrics() + (H.workspace ? H.workspace.notice() : H.liveCalendar?.coursesView() || '') + courseCards(false, true)
+      + (sticker ? `<div class="reward-course-find reward-course-find--shelf">${sticker}</div>` : '');
+  }
   function calendarView() {
     if (H.liveCalendar?.week) return H.liveCalendar.weekView();
 
@@ -449,7 +454,7 @@
     document.title = `${title} — Hustle`;
     // The weekly planner manages its own refreshes and open days.
     const mountedWeek = hash === 'calendar' && H.liveCalendar?.week && main.querySelector('[data-paper-week]');
-    if (pomodoroSettings) renderSettings('pomodoro', `<div class="dedicated-focus">${timerCard()}${weeklyChart()}</div>`);
+    if (pomodoroSettings) renderSettings('pomodoro', `<div class="dedicated-focus">${timerCard('timer-course', rewards?.marker('headphones'))}${weeklyChart()}</div>`);
     else if (courseSettings) {
       if (!main.querySelector('[data-course-appearance]')) renderSettings('courses', H.workspace.courseAppearanceSettings());
     }

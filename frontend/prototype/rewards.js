@@ -22,8 +22,8 @@
   ];
   const inventory = [...shop, ...previousRewards];
   const albumAvatar = shop.find((item) => item.collection);
-  const donkeys = [
-    { id: 'deadline', name: 'Дедлайнер', pose: 'deadline', hint: 'Поруч із дедлайнами в огляді.' },
+  const previousDonkeys = [
+    { id: 'deadline', name: 'Дедлайнер', pose: 'deadline', hint: 'Біля списку дедлайнів.' },
     { id: 'notes', name: 'Лектор', pose: 'study', hint: 'Коли відкриєш конспект теми.' },
     { id: 'search', name: 'Шукач', pose: 'search', hint: 'Там, де зібрано теми й матеріали курсу.' },
     { id: 'quiz', name: 'Квізер', pose: 'complete', hint: 'Після успішної самоперевірки.' },
@@ -33,14 +33,26 @@
     { id: 'review-due', name: 'Повторювач', pose: 'review-due', hint: 'На початку серії карток за розкладом.' },
     { id: 'oral-practice', name: 'Оратор', pose: 'oral-practice', hint: 'У підготовці до усного захисту.' },
   ];
+  const sceneDonkeys = [
+    { id: 'trail-map', name: 'Картограф', pose: 'trail-map', hint: 'Хто проклав твій навчальний маршрут?' },
+    { id: 'paper-plane', name: 'Пілот', pose: 'paper-plane', hint: 'Приземлився десь під списком предметів.' },
+    { id: 'book-fort', name: 'Книжковий вартовий', pose: 'book-fort', hint: 'Визирає зі стосу матеріалів курсу.' },
+    { id: 'card-trick', name: 'Фокусник', pose: 'card-trick', hint: 'Має козир у колодах Anki.' },
+    { id: 'lucky-die', name: 'Кубик удачі', pose: 'lucky-die', hint: 'Докотився до кінця списку тем у практиці курсу.' },
+    { id: 'headphones', name: 'Тихий режим', pose: 'headphones', hint: 'Знайшов тишу біля таймера Pomodoro.' },
+    { id: 'pencil-race', name: 'Олівцевий гонщик', pose: 'pencil-race', hint: 'Промчав повз дні й зупинився під календарем місяця.' },
+    { id: 'nap-notes', name: 'Дрімко', pose: 'nap-notes', hint: 'Дрімає там, де налаштовуєш час навчання на день.' },
+  ];
+  const donkeys = [...previousDonkeys, ...sceneDonkeys];
   const legacyCollection = ['deadline', 'notes', 'search', 'quiz'];
+  const albumVersion = 3;
 
   let legacyXP = () => 0;
   let ankiQueue = null;
   let ankiReviewedToday = 0;
   const routes = new WeakMap();
   const key = (kind, course, topic) => `${kind}:${course}:${topic}`;
-  const mascot = (pose) => `<img src="/prototype/assets/mascot/${pose}.webp" width="384" height="384" alt="" decoding="async">`;
+  const mascot = (pose, loading = 'eager') => `<img src="/prototype/assets/mascot/${pose}.webp" width="384" height="384" alt="" decoding="async" loading="${loading}">`;
   const activeAvatar = (data = read()) => shop.find(item => item.id === data.equipped.avatar && owns(item, data));
   const portrait = (item) => `<span class="reward-portrait" data-reward-tone="${item.tone}" aria-hidden="true">${mascot(item.pose)}</span>`;
   const found = (data) => donkeys.filter((donkey) => data.found[donkey.id]).length;
@@ -54,7 +66,11 @@
     const unlocked = map('unlocked');
     // Credit the original four-sticker album for existing owners when its size changes.
     if (!data?.albumVersion && legacyCollection.every((id) => found[id])) unlocked.library = true;
-    return { practice: map('practice'), bought: map('bought'), equipped: map('equipped'), found, unlocked, albumVersion: 2,
+    if ((data?.albumVersion ?? 0) < albumVersion && previousDonkeys.every(({ id }) => found[id])) {
+      unlocked.library = true;
+      unlocked[albumAvatar.id] = true;
+    }
+    return { practice: map('practice'), bought: map('bought'), equipped: map('equipped'), found, unlocked, albumVersion,
       targets: map('targets'), recent: data?.recent || null, recentDeadline: data?.recentDeadline || '' };
   }
 
@@ -178,35 +194,55 @@
   function marker(id, style = '') {
     const donkey = donkeys.find((entry) => entry.id === id);
     if (!donkey || read().found[id]) return '';
-    return `<button type="button" class="reward-donkey ${style}" data-reward-find="${id}" aria-label="Знайти ослика «${donkey.name}»">${mascot(donkey.pose)}<span aria-hidden="true">✦</span></button>`;
+    const scene = sceneDonkeys.includes(donkey) ? 'reward-donkey--scene' : '';
+    return `<button type="button" class="reward-donkey ${scene} ${style}" data-reward-find="${id}" aria-label="Знайти ослика «${donkey.name}»">${mascot(donkey.pose)}<span aria-hidden="true">✦</span></button>`;
   }
 
   async function find(button) {
-    if (button.disabled) return;
-    button.disabled = true;
+    if (button.disabled || button.hasAttribute('aria-disabled')) return;
+    const scene = button.classList.contains('reward-donkey--scene');
+    if (scene) button.setAttribute('aria-disabled', 'true');
+    else button.disabled = true;
     try {
       const id = button.dataset.rewardFind;
       const donkey = donkeys.find((entry) => entry.id === id);
-      const message = await change((data) => {
+      const foundMessage = await change((data) => {
         if (!donkey || data.found[id]) return null;
         data.found[id] = true;
         const count = found(data);
-        if (count === donkeys.length) data.unlocked.library = true;
-        return count === donkeys.length ? `Колекцію зібрано. Аватарку «${albumAvatar.name}» відкрито.` : `«${donkey.name}» у колекції · ${count}/${donkeys.length}`;
+        if (count === donkeys.length) {
+          const avatarUnlocked = data.unlocked[albumAvatar.id];
+          data.unlocked.library = true;
+          data.unlocked[albumAvatar.id] = true;
+          return avatarUnlocked ? 'Колекцію зібрано!' : `Колекцію зібрано. Аватарку «${albumAvatar.name}» відкрито.`;
+        }
+        return `«${donkey.name}» у колекції · ${count}/${donkeys.length}`;
       });
-      announce(message || 'Ослик уже в колекції.');
+      const message = foundMessage || 'Ослик уже в колекції.';
+      announce(message);
       if (!button.isConnected) {
         document.querySelector('[data-rewards-panel] a[href="#rewards/collection"]')?.focus();
+        return;
+      }
+      if (scene) {
+        button.setAttribute('aria-label', message);
+        button.toggleAttribute('data-reward-collected', true);
+        button.querySelector('span').textContent = '✓';
         return;
       }
       const status = button.ownerDocument.createElement('span');
       status.className = 'reward-find-note';
       status.role = 'status';
       status.tabIndex = -1;
-      status.textContent = message || 'Ослик уже в колекції.';
+      status.textContent = message;
       button.after(status);
       status.focus({ preventScroll: true });
     } catch {
+      if (scene) {
+        button.removeAttribute('aria-disabled');
+        announce('Не вдалося зберегти знахідку. Спробуй іще раз.');
+        return;
+      }
       button.disabled = false;
       const note = button.ownerDocument.createElement('p');
       note.className = 'field-error';
@@ -221,7 +257,8 @@
     const next = shop.find((item) => !item.collection && !owns(item, data));
     const value = p.next ? p.xp - p.floor : 1;
     const max = p.next ? p.next - p.floor : 1;
-    return `<div class="reward-level-head"><div><span class="reward-level-name">Рівень ${p.level}</span><strong>${p.xp} XP</strong></div>${marker('deadline') || `<span class="reward-donkey-art" aria-hidden="true">${mascot('deadline')}</span>`}</div>
+    const scout = marker('trail-map', 'reward-donkey--route') || `<span class="reward-donkey-art reward-donkey--route" aria-hidden="true">${mascot('trail-map')}</span>`;
+    return `<div class="reward-level-head"><div><span class="reward-level-name">Рівень ${p.level}</span><strong>${p.xp} XP</strong></div>${scout}</div>
       <progress class="reward-meter" aria-label="Досвід до наступного рівня" value="${value}" max="${max}"></progress>
       <p class="reward-level-copy">${p.next ? `Ще ${p.next - p.xp} XP до рівня ${p.level + 1}` : 'Усі рівні відкрито'}</p>
       ${next ? `<a class="reward-panel-row" href="#rewards">${portrait(next)}<span><strong>Аватарка «${next.name}»</strong><small>${availability(next, data, p) || 'Можна купити'}</small></span>${icon('arrow')}</a>` : ''}
@@ -359,8 +396,8 @@
     const album = hash === 'rewards/collection';
     const previous = previousRewards.filter(item => owns(item, data));
     const content = album
-      ? `<div class="reward-album-summary"><strong>${found(data)}/${donkeys.length} знайдено</strong><span>${owns(albumAvatar, data) ? `Аватарку «${albumAvatar.name}» відкрито.` : `Повна колекція відкриває аватарку «${albumAvatar.name}».`}</span>${owns(albumAvatar, data) ? '<a class="text-button" href="#rewards">До аватарок →</a>' : ''}</div>
-        <div class="reward-grid reward-album-grid">${donkeys.map((donkey) => `<article class="reward-item" ${data.found[donkey.id] ? 'data-album-found' : ''}><span class="reward-album-art" aria-hidden="true">${mascot(donkey.pose)}</span><div><h2>${data.found[donkey.id] ? donkey.name : 'Ослик сховався'}</h2><p>${data.found[donkey.id] ? 'У колекції' : donkey.hint}</p></div></article>`).join('')}</div>`
+      ? `<div class="reward-album-summary"><strong>${found(data)}/${donkeys.length} знайдено</strong><span>${owns(albumAvatar, data) ? `Аватарку «${albumAvatar.name}» відкрито.` : `Повна колекція відкриває аватарку «${albumAvatar.name}».`}</span>${owns(albumAvatar, data) ? '<a class="text-button" href="#rewards">До аватарок →</a>' : ''}<p>Знайдеш ослика в навчальному просторі — натисни на нього.</p></div>
+        <div class="reward-grid reward-album-grid">${donkeys.map((donkey) => `<article class="reward-item" ${data.found[donkey.id] ? 'data-album-found' : ''}><span class="reward-album-art" aria-hidden="true">${mascot(donkey.pose, 'lazy')}</span><div><h2>${data.found[donkey.id] ? donkey.name : 'Ослик сховався'}</h2><p>${data.found[donkey.id] ? 'У колекції' : donkey.hint}</p></div></article>`).join('')}</div>`
       : `<div class="reward-grid reward-product-grid">${shop.map((item) => {
         const owned = owns(item, data);
         const equipped = data.equipped[item.slot] === item.id;

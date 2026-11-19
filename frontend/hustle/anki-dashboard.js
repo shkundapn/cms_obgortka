@@ -271,6 +271,9 @@
     const draft = pastForm && new FormData(pastForm);
     const addOpen = host.querySelector('[data-anki-add-drawer]')?.open;
     const learnedOpen = host.querySelector('[data-anki-learned-drawer]')?.open;
+    const rewards = (window.frameElement ? window.parent : window).HustleRewards;
+    const sticker = rewards?.marker('card-trick');
+    const deckHeading = '<h2 id="anki-decks-title">Колоди за курсами</h2>';
 
     host.innerHTML = `
       <div class="anki-page" data-anki-overview-page>
@@ -291,7 +294,7 @@
         </section>
 
         <section class="anki-decks-section" aria-labelledby="anki-decks-title">
-          <h2 id="anki-decks-title">Колоди за курсами</h2>
+          ${sticker ? `<div class="reward-scene-heading reward-decks-heading">${deckHeading}${sticker}</div>` : deckHeading}
           ${decks.length ? `<div class="anki-deck-grid">${decks.map(renderDeck).join('')}</div>` :
             '<p class="anki-empty-box">Тут з’являться картки з курсів і власні картки.</p>'}
         </section>

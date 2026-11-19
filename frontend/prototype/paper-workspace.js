@@ -200,11 +200,14 @@
     const frame = '<div class="paper-frame-shell"><div class="paper-frame-loader" data-paper-frame-loader></div><iframe class="paper-course-tools" title="' + esc(title) + '" data-route="' + esc(hash) + '"' +
       (restoreStudyFocus ? ' data-focus-study-tab' : '') +
       (currentCourse ? ' data-shared-course-header' : '') + ' src="' + esc(src) + '" allow="microphone"></iframe></div>';
-    if (hash === 'settings') window.HustleDashboard.renderSettings('general', goal + frame);
-    else {
+    if (hash === 'settings') {
+      const sticker = window.HustleRewards?.marker('nap-notes');
+      window.HustleDashboard.renderSettings('general',
+        (sticker ? `<div class="reward-scene-heading reward-goal-row">${goal}${sticker}</div>` : goal) + frame);
+    } else {
       const section = course?.[2];
       const found = ['reading', 'topic'].includes(section) ? 'notes'
-        : ['topics', 'materials', 'files'].includes(section) ? 'search' : '';
+        : ['topics', 'files'].includes(section) ? 'search' : '';
       const sticker = found && window.HustleRewards?.marker(found);
       main.innerHTML = header + (sticker ? `<div class="reward-course-find">${sticker}</div>` : '') + frame;
     }

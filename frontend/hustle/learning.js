@@ -118,8 +118,19 @@
       }else{
         content=practiceCards(window.HustleCurriculum?HustleCurriculum.practiceTopics(bundle):bundle.topic_mixes)||empty('Практики для цього курсу поки немає.');
       }
+      const sticker = rewardStore()?.marker('lucky-die');
+      if (sticker) content += `<div class="reward-course-find reward-course-find--shelf">${sticker}</div>`;
     }
-    else if(tab==='materials')content=materialToolbar()+`<div class="materials-heading"><span class="muted">За темами курсу</span><button class="text-button" data-structure>Уточнити структуру ${icon('settings')}</button></div>`+materialCards(groupsFor(bundle),bundle.course)+(bundle.course.source_type!=='manual_upload'?`<details class="source-tree" data-source-files><summary>Файли з Moodle</summary><div data-file-list></div></details>`:'')+`<p class="mascot-empty" data-search-empty ${materialRecords.length?'hidden':''}><span class="mascot-sticker mascot-sticker--search" aria-hidden="true" hidden><img src="/prototype/assets/mascot/search.webp" alt="" width="384" height="384" loading="lazy"></span>Матеріалів не знайдено.</p>`;
+    else if(tab==='materials') {
+      const sticker = rewardStore()?.marker('book-fort') || '';
+      const cards = materialCards(groupsFor(bundle), bundle.course);
+      const files = bundle.course.source_type !== 'manual_upload'
+        ? '<details class="source-tree" data-source-files><summary>Файли з Moodle</summary><div data-file-list></div></details>' : '';
+      content = materialToolbar() + `<div class="materials-heading"><span class="muted">За темами курсу</span>${sticker}
+        <button class="text-button" data-structure>Уточнити структуру ${icon('settings')}</button></div>${cards}${files}
+        <p class="mascot-empty" data-search-empty ${materialRecords.length ? 'hidden' : ''}>
+          <span class="mascot-sticker mascot-sticker--search" aria-hidden="true" hidden><img src="/prototype/assets/mascot/search.webp" alt="" width="384" height="384" loading="lazy"></span>Матеріалів не знайдено.</p>`;
+    }
     else if(tab==='cards'||tab==='quizzes')content=HustleTopicCards.view(bundle,tab);
     else if(tab==='exam')content=examView(bundle);
     else if(tab==='manage')content=HustleCourse.manage(bundle);

@@ -26,6 +26,8 @@
     });
   }
   document.addEventListener('click', e => {
+    const sticker = e.target.closest('.reward-donkey--scene[data-reward-find]');
+    if (sticker) { parent.HustleRewards?.find(sticker); return; }
     const a = e.target.closest('a[href]');
     if (!a || e.defaultPrevented || a.target === '_blank' || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const url = new URL(a.href);

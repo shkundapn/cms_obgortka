@@ -1,7 +1,7 @@
 /* Comprehensive Anki Spaced Repetition Module (powered exclusively through HustleSRSEngine) */
 (() => {
   const { escape: esc, icon } = UI;
-  const THEME_KEY = 'hustle-anki-theme-v1';
+  const cardsLabel = count => UI.countLabel(count, 'картка', 'картки', 'карток');
 
   let lastSession = null;
   let activeDashboardHost = null;
@@ -28,23 +28,6 @@
 
   function ownerId() {
     return activeAccount?.owner_id || 'guest';
-  }
-
-  function getThemePreference() {
-    try {
-      const saved = localStorage.getItem(THEME_KEY);
-      if (saved === 'dark' || saved === 'light') return saved;
-    } catch {}
-    return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  }
-
-  function applyTheme(el, nextTheme) {
-    const theme = nextTheme || getThemePreference();
-    if (el) el.dataset.ankiTheme = theme;
-    try {
-      if (nextTheme) localStorage.setItem(THEME_KEY, nextTheme);
-    } catch {}
-    return theme;
   }
 
   function renderRich(value) {
@@ -90,9 +73,8 @@
     return srs ? raw.map(c => srs.fromBackendCard(c)) : raw;
   }
 
-  function courseDecksFromSession(session) {
+  function courseDecksFromSession(session, cards) {
     const srs = engine();
-    const cards = allCardsFromSession(session);
     const courses = session?.courses || [];
     if (srs) return srs.computeCourseDecks(cards, courses);
     return courses.map(c => ({
@@ -108,25 +90,71 @@
     }));
   }
 
-  function summaryTotals(session, decks) {
-    const stats = session?.stats || {};
-    const newCount = decks.reduce((sum, d) => sum + d.newCount, 0) || Number(stats.new_count || 0);
-    const learningCount = decks.reduce((sum, d) => sum + d.learningCount, 0) || Number(stats.learning_count || 0);
-    const reviewDueCount = decks.reduce((sum, d) => sum + d.dueCount, 0) || Number(stats.review_due_count || 0);
-    const totalDue = Number(stats.due_now ?? (newCount + learningCount + reviewDueCount));
-    const totalCards = Number(stats.total_cards ?? decks.reduce((s, d) => s + d.totalCount, 0));
-    const metrics = activeMetrics(session);
+  function studyQueue(session, courseId, practiceAll, cards = allCardsFromSession(session)) {
+    const srs = engine();
+    return srs
+      ? srs.buildStudyQueue(cards, activeConfig(session), { courseId, practiceAll })
+      : (session.queue || []).filter(c => courseId === null || Number(c.course_id) === Number(courseId));
+  }
+
+  function reviewOffer(session, courseId = null, cards = allCardsFromSession(session)) {
+    const queue = studyQueue(session, courseId, false, cards);
+    const count = queue.length;
+    const practiceAll = !count && studyQueue(session, courseId, true, cards).length > 0;
+    const path = courseId === null ? '#anki/study' : `#anki/study/${courseId}`;
     return {
-      totalDue,
-      newCount,
-      learningCount,
-      reviewDueCount,
-      totalCards,
-      reviewedToday: Number(stats.reviewed_today || 0),
-      streakDays: metrics.streakDays,
-      learnedCount: Number(stats.learned_count || 0),
-      nextDueIn: stats.next_due_in || null,
+      count,
+      queue,
+      href: count ? path : practiceAll ? `${path}?all=1` : '',
+      label: count ? 'Повторити' : 'Повторити поза розкладом',
     };
+  }
+
+  function decksWithReview(session, cards) {
+    const cardsByCourse = new Map();
+    for (const card of cards) {
+      const id = Number(card.courseId ?? card.course_id);
+      if (!cardsByCourse.has(id)) cardsByCourse.set(id, []);
+      cardsByCourse.get(id).push(card);
+    }
+    return courseDecksFromSession(session, cards).map(deck => ({
+      ...deck,
+      review: reviewOffer(session, deck.courseId, cardsByCourse.get(deck.courseId) || []),
+    }));
+  }
+
+  function countsInQueue(queue) {
+    const counts = { newCount: 0, learningCount: 0, dueCount: 0 };
+    for (const card of queue) {
+      const state = card.state ?? card.card_state;
+      if (state === 'new') counts.newCount += 1;
+      else if (state === 'learning' || state === 'relearning') counts.learningCount += 1;
+      else counts.dueCount += 1;
+    }
+    return counts;
+  }
+
+  function renderDeckCounts({ newCount, learningCount, dueCount }) {
+    return `
+      <dl class="anki-deck-counts">
+        <div><dt>Нові</dt><dd data-anki-new-count>${newCount}</dd></div>
+        <div><dt>У вивченні</dt><dd data-anki-learning-count>${learningCount}</dd></div>
+        <div><dt>До повторення</dt><dd data-anki-due-count>${dueCount}</dd></div>
+      </dl>`;
+  }
+
+  function reviewStatus(session, review) {
+    if (review.count) return `${cardsLabel(review.count)} на сьогодні`;
+    return Number(session.stats?.total_cards ?? allCardsFromSession(session).length)
+      ? 'Карток за розкладом немає'
+      : 'Поки немає карток';
+  }
+
+  function settingsButton(compact = false) {
+    return `<button type="button" class="${compact ? 'icon-button anki-settings-button' : 'secondary'}"
+      data-anki-open-settings aria-label="Налаштування Anki" ${compact ? 'title="Налаштування Anki"' : ''}>
+      ${icon('settings')}${compact ? '' : ' Налаштування'}
+    </button>`;
   }
 
   function navigateToAnki(subpath = '') {
@@ -141,47 +169,64 @@
   }
 
   // ==========================================================================
-  // 1. Dashboard Summary Card (compact clickable card -> #anki or #anki/study)
+  // Dashboard panel with the daily queue and course-level study actions.
   // ==========================================================================
+  function renderDashboardDeck(deck) {
+    const title = esc(UI.courseName(deck.title));
+    const { review } = deck;
+    const action = review.count ? 'Повторити' : 'Поза розкладом';
+
+    return `
+      <article class="anki-dashboard-deck" data-anki-dashboard-deck="${deck.courseId}">
+        <div class="anki-deck-identity">
+          <div class="anki-deck-title">
+            <h4>${title}</h4>
+            <span>${cardsLabel(deck.totalCount)} у колоді</span>
+          </div>
+        </div>
+        ${renderDeckCounts(countsInQueue(review.queue))}
+        ${review.href ? `<a class="anki-text-action anki-dashboard-deck-action" href="${review.href}"
+          data-anki-study-course="${deck.courseId}" aria-label="${action} · ${title}">
+          ${action} ${icon('arrow')}
+        </a>` : ''}
+      </article>`;
+  }
+
   function drawDashboardWidget(host, session) {
     if (!host || !host.isConnected || !session) return;
-    applyTheme(host);
-    const cfg = activeConfig(session);
-    const decks = courseDecksFromSession(session);
-    const totals = summaryTotals(session, decks);
-    const retentionPct = Math.round(Number(cfg.targetRetention || 0.9) * 100);
+    const cards = allCardsFromSession(session);
+    const review = reviewOffer(session, null, cards);
+    const decks = decksWithReview(session, cards).filter(deck => deck.totalCount > 0);
+    const reviewedToday = Number(session.stats?.reviewed_today || 0);
 
     host.innerHTML = `
-      <article class="anki-summary-card" data-anki-summary-card tabindex="0" role="region" aria-label="Інтервальне повторення Anki">
-        <div class="anki-summary-main">
-          <div class="anki-summary-head">
-            <span class="anki-kicker">🧠 Інтервальне повторення · FSRS</span>
-            <span class="anki-streak-pill" title="Днів повторення поспіль">🔥 ${totals.streakDays} дн.</span>
+      <article class="anki-summary-card" data-anki-summary-card>
+        <header class="anki-dashboard-head">
+          <div class="anki-summary-main">
+            <span class="anki-symbol">${icon('cards')}</span>
+            <h2>Картки Anki</h2>
           </div>
-          <div class="anki-summary-numbers">
-            <div class="anki-due-hero">
-              <strong>${totals.totalDue}</strong>
-              <span>карток на сьогодні</span>
-            </div>
-            <div class="anki-counter-trio" aria-label="Розподіл карток">
-              <span class="anki-pill is-new" title="Нові картки">${totals.newCount} нових</span>
-              <span class="anki-pill is-learning" title="У процесі вивчення">${totals.learningCount} вивчається</span>
-              <span class="anki-pill is-due" title="Повторення на сьогодні">${totals.reviewDueCount} до повтору</span>
-            </div>
+          ${settingsButton(true)}
+        </header>
+        <section class="anki-dashboard-today" aria-label="Черга на сьогодні">
+          <div class="anki-dashboard-today-copy">
+            <h3>На сьогодні</h3>
+            <p>${review.count ? cardsLabel(review.count) : reviewStatus(session, review)}</p>
+            ${reviewedToday ? `<small>Вже повторено ${reviewedToday}</small>` : ''}
           </div>
-          <p class="anki-summary-meta">
-            Ціль запам’ятовування: <strong>${retentionPct}%</strong> · Бюджет: <strong>${cfg.dailyMinutes} хв/день</strong> (до ${cfg.newCardsLimit} нових) · Повторено сьогодні: <strong>${totals.reviewedToday}</strong>
-          </p>
-        </div>
-        <div class="anki-summary-actions">
-          <button type="button" class="primary anki-start-cta" data-anki-start-review>
-            ${totals.totalDue > 0 ? 'Почати повторення →' : (totals.totalCards > 0 ? 'Тренуватись поза розкладом →' : 'Відкрити Anki →')}
-          </button>
-          <div class="anki-summary-secondary">
-            <button type="button" class="secondary" data-anki-open-overview>Огляд курсів (${decks.length})</button>
-            <button type="button" class="text-button" data-anki-open-settings>⚙ Ціль і час</button>
-          </div>
-        </div>
+          ${review.href ? `<a class="primary" href="${review.href}" data-anki-start-review>
+            ${review.count ? 'Почати повторення' : review.label} ${icon('arrow')}
+          </a>` : ''}
+        </section>
+        ${decks.length ? `
+          <section class="anki-dashboard-courses" aria-label="Картки за предметами">
+            <header class="anki-dashboard-subhead">
+              <h3>За предметами</h3>
+              <a class="anki-text-action" href="#anki" data-anki-open-overview>Усі колоди ${icon('arrow')}</a>
+            </header>
+            <div class="anki-dashboard-decks">${decks.map(renderDashboardDeck).join('')}</div>
+          </section>` : `
+          <a class="anki-text-action anki-dashboard-empty-link" href="#anki" data-anki-open-overview>Усі колоди ${icon('arrow')}</a>`}
       </article>
     `;
   }
@@ -189,151 +234,116 @@
   // ==========================================================================
   // 2. Course Overview Page (#anki)
   // ==========================================================================
+  function renderDeck(deck) {
+    const { review } = deck;
+    return `
+      <article class="anki-deck-card" data-anki-deck="${deck.courseId}">
+        <div class="anki-deck-identity">
+          <span class="anki-symbol anki-symbol--small">${icon('cards')}</span>
+          <div class="anki-deck-title">
+            <h3>${esc(UI.courseName(deck.title))}</h3>
+            <span>${cardsLabel(deck.totalCount)}</span>
+          </div>
+        </div>
+        ${deck.totalCount ? `
+          ${renderDeckCounts(deck)}
+          <div class="anki-deck-progress">
+            <span>Опрацьовано</span>
+            <strong>${deck.masteredCount} / ${deck.totalCount}</strong>
+            <progress class="anki-progress-bar" aria-label="Прогрес колоди" max="100" value="${deck.progressPercent}"></progress>
+          </div>` : ''}
+        ${review.href ? `<a class="secondary anki-deck-action" href="${review.href}" data-anki-study-course="${deck.courseId}">
+          ${review.count ? 'Повторити' : 'Поза розкладом'} ${icon('arrow')}
+        </a>` : ''}
+      </article>`;
+  }
+
   function renderCourseOverviewPage(host, session) {
     if (!host || !host.isConnected || !session) return;
-    applyTheme(host);
-    const cfg = activeConfig(session);
-    const decks = courseDecksFromSession(session);
-    const totals = summaryTotals(session, decks);
-    const theme = getThemePreference();
+    const cards = allCardsFromSession(session);
+    const decks = decksWithReview(session, cards);
+    const review = reviewOffer(session, null, cards);
     const learnedList = session.learned_cards || [];
+    const reviewedToday = Number(session.stats?.reviewed_today || 0);
+    const nextDue = !review.count && session.stats?.next_due_in;
+    const pastForm = host.querySelector('[data-anki-add-form]');
+    const draft = pastForm && new FormData(pastForm);
+    const addOpen = host.querySelector('[data-anki-add-drawer]')?.open;
+    const learnedOpen = host.querySelector('[data-anki-learned-drawer]')?.open;
 
     host.innerHTML = `
       <div class="anki-page" data-anki-overview-page>
-        <div class="anki-page-topbar">
-          <div class="anki-page-title-block">
-            <a class="text-button anki-back-link" href="#dashboard">← На дашборд</a>
-            <h1>Інтервальне повторення Anki</h1>
-            <p class="muted">Адаптивний планувальник FSRS · Ціль ${Math.round(cfg.targetRetention * 100)}% · Бюджет ${cfg.dailyMinutes} хв/день (до ${cfg.newCardsLimit} нових/день)</p>
-          </div>
-          <div class="anki-page-actions">
-            <button type="button" class="secondary" data-anki-theme-toggle title="Перемкнути тему">
-              ${theme === 'dark' ? '☀️ Світла тема' : '🌙 Темна тема'}
-            </button>
-            <button type="button" class="secondary" data-anki-open-settings>⚙ Ціль і налаштування</button>
-            <button type="button" class="primary" data-anki-start-review>
-              ${totals.totalDue > 0 ? `Почати повторення (${totals.totalDue}) →` : 'Повторити все →'}
-            </button>
-          </div>
-        </div>
+        <a class="anki-text-action anki-back-link" href="#dashboard">${icon('arrow-left')} Мій огляд</a>
+        <header class="anki-page-topbar">
+          <h1 tabindex="-1">Картки Anki</h1>
+          ${settingsButton()}
+        </header>
 
-        <section class="anki-overview-strip" aria-label="Загальна статистика">
-          <div class="anki-metric-tile">
-            <span>На сьогодні</span>
-            <strong>${totals.totalDue}</strong>
-            <small>${totals.nextDueIn ? `Наступна через ${esc(totals.nextDueIn)}` : 'Черга актуальна'}</small>
+        <section class="anki-today" aria-labelledby="anki-today-title">
+          <span class="anki-symbol">${icon('cards')}</span>
+          <div class="anki-today-copy">
+            <h2 id="anki-today-title">${reviewStatus(session, review)}</h2>
+            ${nextDue ? `<p>Наступна картка через ${esc(nextDue)}</p>` :
+              reviewedToday ? `<p>Повторено сьогодні · ${cardsLabel(reviewedToday)}</p>` : ''}
           </div>
-          <div class="anki-metric-tile">
-            <span>Поточна серія</span>
-            <strong>🔥 ${totals.streakDays}</strong>
-            <small>днів поспіль</small>
-          </div>
-          <div class="anki-metric-tile">
-            <span>Повторено сьогодні</span>
-            <strong>${totals.reviewedToday}</strong>
-            <small>Темп ~${Math.round(cfg.avgSecondsPerCard)} с/картка</small>
-          </div>
-          <div class="anki-metric-tile">
-            <span>Всього в базі</span>
-            <strong>${totals.totalCards}</strong>
-            <small>${totals.learnedCount} вивчених</small>
-          </div>
+          ${review.href ? `<a class="primary" href="${review.href}" data-anki-start-review>${review.label} ${icon('arrow')}</a>` : ''}
         </section>
 
-        <section class="anki-decks-section" aria-label="Колоди курсів">
-          <div class="anki-section-head">
-            <h2>Колоди за курсами</h2>
-            <div class="anki-legend">
-              <span class="anki-pill is-new">Нові</span>
-              <span class="anki-pill is-learning">Вивчаються</span>
-              <span class="anki-pill is-due">До повтору</span>
-            </div>
-          </div>
-          ${decks.length ? `
-            <div class="anki-deck-grid">
-              ${decks.map(deck => {
-                const dueInDeck = deck.newCount + deck.learningCount + deck.dueCount;
-                return `
-                  <article class="anki-deck-card" data-anki-deck="${deck.courseId}">
-                    <div class="anki-deck-head">
-                      <h3>${esc(deck.title)}</h3>
-                      <span class="anki-deck-total">${deck.totalCount} карток</span>
-                    </div>
-                    <div class="anki-counter-trio">
-                      <span class="anki-pill is-new" data-anki-new-count>${deck.newCount}</span>
-                      <span class="anki-pill is-learning" data-anki-learning-count>${deck.learningCount}</span>
-                      <span class="anki-pill is-due" data-anki-due-count>${deck.dueCount}</span>
-                    </div>
-                    <div class="anki-progress-wrap">
-                      <div class="anki-progress-labels">
-                        <span>Засвоєння</span>
-                        <strong>${deck.progressPercent}% (${deck.masteredCount}/${deck.totalCount})</strong>
-                      </div>
-                      <div class="anki-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${deck.progressPercent}">
-                        <span style="width:${deck.progressPercent}%"></span>
-                      </div>
-                    </div>
-                    <div class="anki-deck-footer">
-                      <button type="button" class="primary anki-study-course-btn" data-anki-study-course="${deck.courseId}" data-practice-all="${dueInDeck === 0 && deck.totalCount > 0 ? '1' : '0'}" ${deck.totalCount === 0 ? 'disabled' : ''}>
-                        ${dueInDeck > 0 ? `Вчити зараз (${dueInDeck}) →` : (deck.totalCount > 0 ? 'Повторити поза розкладом →' : 'Немає карток')}
-                      </button>
-                    </div>
-                  </article>
-                `;
-              }).join('')}
-            </div>
-          ` : `
-            <div class="anki-empty-box">
-              <div>
-                <strong>Поки немає жодної картки для повторення.</strong>
-                <p class="muted">Згенеруй картки в будь-якому курсі або створи власну картку нижче.</p>
+        <section class="anki-decks-section" aria-labelledby="anki-decks-title">
+          <h2 id="anki-decks-title">Колоди за курсами</h2>
+          ${decks.length ? `<div class="anki-deck-grid">${decks.map(renderDeck).join('')}</div>` :
+            '<p class="anki-empty-box">Тут з’являться картки з курсів і власні картки.</p>'}
+        </section>
+
+        <div class="anki-drawers">
+          <details class="anki-drawer" data-anki-add-drawer ${addOpen ? 'open' : ''}>
+            <summary>${icon('plus')} Додати картку ${icon('chevron-down')}</summary>
+            <form class="anki-settings-form anki-add-form" data-anki-add-form>
+              <label class="anki-field">
+                Питання або термін
+                <textarea name="front" rows="3" required></textarea>
+              </label>
+              <label class="anki-field">
+                Відповідь
+                <textarea name="back" rows="3" required></textarea>
+              </label>
+              <label class="anki-field">
+                Колода
+                <select name="course_id">
+                  <option value="0">Власні визначення</option>
+                  ${(session.courses || []).filter(c => Number(c.course_id) > 0).map(c =>
+                    `<option value="${Number(c.course_id)}">${esc(UI.courseName(c.title))}</option>`).join('')}
+                </select>
+              </label>
+              <div class="anki-form-actions">
+                <button type="submit" class="primary">${icon('plus')} Додати картку</button>
               </div>
-            </div>
-          `}
-        </section>
+            </form>
+          </details>
 
-        <details class="anki-drawer" data-anki-add-drawer>
-          <summary>+ Додати власну картку до колоди</summary>
-          <form class="anki-settings-form" data-anki-add-form>
-            <label class="anki-field">
-              Питання / термін (підтримує Markdown і $LaTeX$)
-              <textarea name="front" rows="2" required placeholder="Напр.: Теорема Баєса"></textarea>
-            </label>
-            <label class="anki-field">
-              Відповідь / пояснення
-              <textarea name="back" rows="2" required placeholder="$$P(H|E) = \\frac{P(E|H)P(H)}{P(E)}$$"></textarea>
-            </label>
-            <label class="anki-field">
-              Курс
-              <select name="course_id">
-                <option value="0">Власні визначення</option>
-                ${(session.courses || []).filter(c => Number(c.course_id) > 0).map(c => `<option value="${Number(c.course_id)}">${esc(c.title)}</option>`).join('')}
-              </select>
-            </label>
-            <div style="display:flex; align-items:flex-end;">
-              <button type="submit" class="primary">+ Додати картку</button>
-            </div>
-          </form>
-        </details>
-
-        <details class="anki-drawer" data-anki-learned-drawer>
-          <summary>📖 Вивчені визначення та власні картки (${learnedList.length})</summary>
-          ${learnedList.length ? `
-            <div class="anki-learned-list">
-              ${learnedList.map(c => `
-                <div class="anki-learned-row">
-                  <div>
-                    <strong>${renderInline(c.front)}</strong>
-                    <div class="anki-learned-meta">${esc(c.course_title)}${c.topic_title ? ` · ${esc(c.topic_title)}` : ''} · Наступне: ${c.is_due ? 'Зараз' : `через ${esc(c.next_review_in)}`}</div>
+          <details class="anki-drawer" data-anki-learned-drawer ${learnedOpen ? 'open' : ''}>
+            <summary>${icon('bookmark')} <span>Позначені як вивчені <span class="anki-drawer-count">${learnedList.length}</span></span> ${icon('chevron-down')}</summary>
+            ${learnedList.length ? `
+              <div class="anki-learned-list">
+                ${learnedList.map(c => `
+                  <div class="anki-learned-row">
+                    <div>
+                      <strong>${renderInline(c.front)}</strong>
+                      <div class="anki-learned-meta">${esc(UI.courseName(c.course_title))}${c.topic_title ? ` · ${esc(c.topic_title)}` : ''} · ${c.is_due ? 'До повторення' : `Наступна через ${esc(c.next_review_in)}`}</div>
+                    </div>
+                    <button type="button" class="anki-text-action" data-anki-unlearn="${esc(c.card_key)}">Зняти позначку</button>
                   </div>
-                  <button type="button" class="text-button" data-anki-unlearn="${esc(c.card_key)}">Зняти позначку</button>
-                </div>
-              `).join('')}
-            </div>
-          ` : '<p class="muted" style="margin:.6rem 0 0;">Поки що немає карток, позначених як вивчені.</p>'}
-        </details>
+                `).join('')}
+              </div>
+            ` : '<p class="anki-empty-box">Поки немає позначених карток.</p>'}
+          </details>
+        </div>
       </div>
     `;
+    if (draft) {
+      const form = host.querySelector('[data-anki-add-form]');
+      for (const [name, value] of draft) form.elements[name].value = value;
+    }
     UI.enhance?.(host);
   }
 
@@ -341,12 +351,7 @@
   // 3. Distraction-Free Study Interface (#anki/study & #anki/study/:courseId)
   // ==========================================================================
   function initStudySession(session, courseId = null, practiceAll = false) {
-    const srs = engine();
-    const cfg = activeConfig(session);
-    const allCards = allCardsFromSession(session);
-    const queue = srs
-      ? srs.buildStudyQueue(allCards, cfg, { courseId, practiceAll })
-      : (session.queue || []).filter(c => courseId === null || Number(c.course_id) === Number(courseId));
+    const queue = studyQueue(session, courseId, practiceAll);
 
     studyState.courseId = courseId;
     studyState.practiceAll = practiceAll;
@@ -362,146 +367,110 @@
   }
 
   function stateBadgeHtml(state) {
-    if (state === 'new') return '<span class="anki-pill is-new">Нова</span>';
-    if (state === 'learning' || state === 'relearning') return '<span class="anki-pill is-learning">Вивчається</span>';
-    return '<span class="anki-pill is-due">Повторення</span>';
+    if (state === 'new') return '<span class="anki-status is-new">Нова картка</span>';
+    if (state === 'learning' || state === 'relearning') return '<span class="anki-status is-learning">У вивченні</span>';
+    return '<span class="anki-status">Повторення</span>';
   }
 
-  function renderStudyView(host, session) {
+  const ratings = [
+    ['again', 'Знову', '1'],
+    ['hard', 'Важко', '2'],
+    ['good', 'Добре', '3'],
+    ['easy', 'Легко', '4'],
+  ];
+
+  function renderStudyView(host, session, focusTarget) {
     if (!host || !host.isConnected || !session) return;
-    applyTheme(host);
     const srs = engine();
     const cfg = activeConfig(session);
-    const theme = getThemePreference();
     const total = studyState.queue.length;
     const card = studyState.queue[studyState.idx] || null;
     const courseName = studyState.courseId !== null
       ? (session.courses || []).find(c => Number(c.course_id) === Number(studyState.courseId))?.title || 'Колода курсу'
-      : 'Усі активні курси';
+      : 'Усі колоди';
+    const back = `<a class="anki-text-action anki-back-link" href="#anki" aria-keyshortcuts="Escape">${icon('arrow-left')} До колод</a>`;
 
     if (studyState.complete || !card) {
       const elapsedSec = Math.max(1, Math.round((Date.now() - (studyState.sessionStartedAt || Date.now())) / 1000));
       const mins = Math.floor(elapsedSec / 60);
       const secs = elapsedSec % 60;
-      const metrics = activeMetrics(session);
+      const reviewed = studyState.reviewedInSession;
+      const canPractice = studyQueue(session, studyState.courseId, true).length > 0;
       host.innerHTML = `
         <div class="anki-study-shell" data-anki-study-view>
-          <header class="anki-study-topbar">
-            <a class="text-button" href="#anki">← До колод</a>
-            <span class="anki-study-course">${esc(courseName)}</span>
-            <button type="button" class="icon-button" data-anki-theme-toggle aria-label="Перемкнути тему">${theme === 'dark' ? '☀️' : '🌙'}</button>
-          </header>
           <section class="anki-study-complete">
-            <div class="anki-complete-icon">🎉</div>
-            <h2>${studyState.reviewedInSession > 0 ? 'Сесію завершено!' : 'Усе на сьогодні повторено!'}</h2>
-            <p class="muted">
-              ${studyState.reviewedInSession > 0
-                ? `Повторено карток: <strong>${studyState.reviewedInSession}</strong> за ${mins ? `${mins} хв ` : ''}${secs} с · Серія: 🔥 ${metrics.streakDays} дн.`
-                : 'У цій колоді зараз немає карток за розкладом FSRS.'}
-            </p>
-            ${studyState.reviewedInSession > 0 ? `
-              <div class="anki-session-breakdown">
-                <span class="anki-pill is-learning">Знову: ${studyState.ratingsCount.again}</span>
-                <span class="anki-pill is-hard">Важко: ${studyState.ratingsCount.hard}</span>
-                <span class="anki-pill is-good">Добре: ${studyState.ratingsCount.good}</span>
-                <span class="anki-pill is-due">Легко: ${studyState.ratingsCount.easy}</span>
-              </div>
-            ` : ''}
+            <span class="anki-symbol">${icon(reviewed ? 'check' : 'cards')}</span>
+            <h1 tabindex="-1">${reviewed ? 'Сесію завершено' : 'Карток за розкладом немає'}</h1>
+            <p>${reviewed ? `${cardsLabel(reviewed)} за ${mins ? `${mins} хв ` : ''}${secs} с` : esc(UI.courseName(courseName))}</p>
+            ${reviewed ? `
+              <dl class="anki-session-breakdown">
+                ${ratings.map(([key, label]) => `<div><dt>${label}</dt><dd>${studyState.ratingsCount[key]}</dd></div>`).join('')}
+              </dl>` : ''}
             <div class="anki-complete-actions">
-              <a class="primary" href="#anki">До огляду курсів</a>
-              <button type="button" class="secondary" data-anki-cram-course="${studyState.courseId !== null ? studyState.courseId : ''}">Повторити поза розкладом</button>
+              <a class="primary" href="#anki">Колоди ${icon('arrow')}</a>
+              ${canPractice ? `<button type="button" class="secondary" data-anki-cram-course="${studyState.courseId ?? ''}">Повторити поза розкладом</button>` : ''}
             </div>
           </section>
         </div>
       `;
+      if (focusTarget) host.querySelector('h1').focus({ preventScroll: true });
       return;
     }
 
     const preview = srs ? srs.getSchedulingPreview(card, cfg) : null;
-    const progressPct = total > 0 ? Math.round(((studyState.idx + (studyState.revealed ? 0.5 : 0)) / total) * 100) : 0;
+    const progressPct = Math.round(((studyState.idx + (studyState.revealed ? 0.5 : 0)) / total) * 100);
+    const cardPosition = `Картка ${studyState.idx + 1} з ${total}`;
+    const revealed = studyState.revealed;
 
     host.innerHTML = `
       <div class="anki-study-shell" data-anki-study-view>
         <header class="anki-study-topbar">
-          <a class="text-button" href="#anki" title="Вийти (Esc)">← Вийти</a>
-          <div class="anki-study-progress-wrap">
-            <div class="anki-study-progress-meta">
-              <span>${esc(card.courseTitle || courseName)}${card.topicTitle ? ` · ${esc(card.topicTitle)}` : ''}</span>
-              <strong>${studyState.idx + 1} / ${total}</strong>
-            </div>
-            <div class="anki-progress-bar" aria-label="Прогрес сесії">
-              <span style="width:${progressPct}%"></span>
-            </div>
-          </div>
-          <div class="anki-study-tools">
-            ${stateBadgeHtml(card.state)}
-            <button type="button" class="icon-button" data-anki-theme-toggle aria-label="Перемкнути тему" title="Тема">${theme === 'dark' ? '☀️' : '🌙'}</button>
-            <button type="button" class="icon-button" data-anki-open-settings aria-label="Налаштування FSRS" title="Ціль і FSRS">${icon('settings')}</button>
-          </div>
+          ${back}
+          ${settingsButton(true)}
         </header>
-
-        <div class="anki-flip-stage">
-          <div class="anki-flip-card ${studyState.revealed ? 'is-flipped' : ''}" data-anki-flip-card>
-            <section class="anki-card-face anki-card-front" aria-hidden="${studyState.revealed ? 'true' : 'false'}">
-              <div class="anki-face-header">
-                <span class="anki-face-label">Питання</span>
-                <button type="button"
-                        class="anki-learn-toggle ${card.isLearned ? 'is-learned' : ''}"
-                        data-anki-toggle-learned="${esc(card.id)}"
-                        data-learned="${card.isLearned ? '1' : '0'}">
-                  ${card.isLearned ? '✓ Вивчена' : '○ Позначити як вивчену'}
-                </button>
-              </div>
-              <div class="anki-face-content reader-prose">${renderRich(card.front)}</div>
-              <div class="anki-face-hint">Натисни <kbd>Space</kbd> або кнопку нижче, щоб відкрити відповідь</div>
-            </section>
-
-            <section class="anki-card-face anki-card-back" aria-hidden="${studyState.revealed ? 'false' : 'true'}">
-              <div class="anki-face-header">
-                <span class="anki-face-label">Відповідь</span>
-                <button type="button"
-                        class="anki-learn-toggle ${card.isLearned ? 'is-learned' : ''}"
-                        data-anki-toggle-learned="${esc(card.id)}"
-                        data-learned="${card.isLearned ? '1' : '0'}">
-                  ${card.isLearned ? '✓ Вивчена' : '○ Позначити як вивчену'}
-                </button>
-              </div>
-              <div class="anki-back-prompt">${renderInline(card.front)}</div>
-              <div class="anki-face-content reader-prose">${renderRich(card.back)}</div>
-              ${card.sourceCitation ? `<div class="anki-citation">Джерело: ${esc(card.sourceCitation)}</div>` : ''}
-            </section>
+        <div class="anki-study-context">
+          <div class="anki-study-progress-meta">
+            <h1 tabindex="-1">${esc(UI.courseName(card.courseTitle || courseName))}</h1>
+            <span class="anki-card-position">${cardPosition}</span>
+          </div>
+          <progress class="anki-progress-bar" aria-label="Прогрес сесії" aria-valuetext="${cardPosition}" max="100" value="${progressPct}"></progress>
+          <div class="anki-study-topic">
+            ${card.topicTitle ? `<span class="anki-topic-name">${esc(card.topicTitle)}</span>` : ''}
+            ${stateBadgeHtml(card.state)}
           </div>
         </div>
 
-        <footer class="anki-study-dock">
-          ${studyState.revealed ? `
-            <div class="anki-rating-grid anki-study-ratings" role="group" aria-label="Оцінка пам’яті (клавіші 1–4)">
-              ${[
-                ['again', 'Знову', '1', 'again'],
-                ['hard', 'Важко', '2', 'hard'],
-                ['good', 'Добре', '3', 'good'],
-                ['easy', 'Легко', '4', 'easy'],
-              ].map(([key, label, shortcut, cls]) => {
-                const opt = preview?.[key];
-                const intervalText = opt?.intervalLabel || '';
-                return `
-                  <button type="button" class="anki-rate-btn ${cls}" data-anki-study-rate="${key}" ${studyState.busy ? 'disabled' : ''}>
-                    <span class="anki-rate-int">${esc(intervalText)}</span>
-                    <span class="anki-rate-label">${label}</span>
-                    <kbd>${shortcut}</kbd>
-                  </button>
-                `;
-              }).join('')}
-            </div>
-          ` : `
-            <button type="button" class="primary anki-reveal-btn" data-anki-study-reveal>
-              Показати відповідь <kbd>Space</kbd>
+        <section class="anki-card-face ${revealed ? 'anki-card-back' : 'anki-card-front'}" aria-labelledby="anki-face-label">
+          <header class="anki-face-header">
+            <h2 class="anki-face-label" id="anki-face-label" tabindex="-1">${revealed ? 'Відповідь' : 'Питання'}</h2>
+            <button type="button" class="anki-learn-toggle" data-anki-toggle-learned="${esc(card.id)}"
+                    data-learned="${card.isLearned ? '1' : '0'}" aria-pressed="${Boolean(card.isLearned)}">
+              ${icon(card.isLearned ? 'check' : 'bookmark')} ${card.isLearned ? 'Вивчена' : 'Позначити як вивчену'}
             </button>
-          `}
-        </footer>
+          </header>
+          ${revealed ? `<div class="anki-back-prompt">${renderInline(card.front)}</div>` : ''}
+          <div class="anki-face-content reader-prose">${renderRich(revealed ? card.back : card.front)}</div>
+          ${revealed && card.sourceCitation ? `<div class="anki-citation">Джерело · ${esc(card.sourceCitation)}</div>` : ''}
+        </section>
+
+        <div class="anki-study-dock">
+          ${revealed ? `
+            <div class="anki-rating-grid anki-study-ratings" role="group" aria-label="Оцінка відповіді">
+              ${ratings.map(([key, label, shortcut]) => `
+                <button type="button" class="anki-rate-btn ${key}" data-anki-study-rate="${key}" aria-keyshortcuts="${shortcut}" ${studyState.busy ? 'disabled' : ''}>
+                  <span class="anki-rate-label">${label}</span>
+                  <span class="anki-rate-int">${esc(preview?.[key]?.intervalLabelUk || preview?.[key]?.intervalLabel || '')}</span>
+                  <kbd aria-hidden="true">${shortcut}</kbd>
+                </button>`).join('')}
+            </div>` : `
+            <button type="button" class="primary anki-reveal-btn" data-anki-study-reveal aria-keyshortcuts="Space">
+              Показати відповідь <kbd aria-hidden="true">Space</kbd>
+            </button>`}
+        </div>
       </div>
     `;
     UI.enhance?.(host);
+    if (focusTarget) host.querySelector(focusTarget)?.focus({ preventScroll: true });
   }
 
   async function submitStudyRating(rating) {
@@ -549,12 +518,12 @@
       studyState.revealed = false;
       studyState.cardStartedAt = Date.now();
       studyState.busy = false;
-      renderStudyView(activePageHost, lastSession);
+      renderStudyView(activePageHost, lastSession, '#anki-face-label');
       if (activeDashboardHost?.isConnected) drawDashboardWidget(activeDashboardHost, lastSession);
     } catch (err) {
       studyState.busy = false;
       UI.toast?.(err.message);
-      renderStudyView(activePageHost, lastSession);
+      renderStudyView(activePageHost, lastSession, `[data-anki-study-rate="${rating}"]`);
     }
   }
 
@@ -562,9 +531,12 @@
   // 4. Adaptive Goal & Time Calibration Modal + Advanced FSRS Settings Drawer
   // ==========================================================================
   function openSettingsModal() {
-    const dialog = document.querySelector('#study-dialog');
-    const body = document.querySelector('#dialog-body');
+    const frame = window.frameElement;
+    const modalDocument = frame?.matches('.paper-course-tools') ? frame.ownerDocument : document;
+    const dialog = modalDocument.querySelector('#study-dialog');
+    const body = modalDocument.querySelector('#dialog-body');
     if (!dialog || !body) return;
+    const trigger = document.activeElement?.closest('[data-anki-open-settings]');
 
     const srs = engine();
     const session = lastSession || { settings: {}, courses: [], stats: {} };
@@ -583,93 +555,91 @@
     const selectedCourses = new Set((cfg.courseIds || []).map(Number));
 
     body.innerHTML = `
-      <h2 id="dialog-title">Налаштування мети та FSRS</h2>
+      <h2 id="dialog-title">Налаштування Anki</h2>
       <form class="anki-modal-form" data-anki-calibration-form>
         <section class="anki-cal-section">
           <div class="anki-cal-head">
-            <label for="anki-retention-range"><strong>1. Ціль запам’ятовування (Retention Goal)</strong></label>
+            <label for="anki-retention-range">Ціль запам’ятовування</label>
             <span class="anki-cal-badge" data-cal-retention-label>${retentionPct}%</span>
           </div>
           <input id="anki-retention-range" type="range" name="target_retention_pct" min="80" max="98" step="1" value="${retentionPct}">
           <div class="anki-preset-row">
-            ${[85, 90, 95].map(p => `<button type="button" class="anki-preset-btn ${retentionPct === p ? 'is-active' : ''}" data-preset-retention="${p}">${p}%</button>`).join('')}
+            ${[85, 90, 95].map(p => `<button type="button" class="anki-preset-btn" aria-pressed="${retentionPct === p}" data-preset-retention="${p}">${p}%</button>`).join('')}
           </div>
-          <small class="muted">Прямо задає FSRS <code>request_retention</code>. Вищий відсоток — частіше повторення перед іспитом.</small>
+          <small>Вища ціль означає частіші повторення.</small>
         </section>
 
         <section class="anki-cal-section">
           <div class="anki-cal-head">
-            <label for="anki-daily-minutes"><strong>2. Щоденний бюджет часу (хв/день)</strong></label>
-            <span class="anki-cal-badge" data-cal-minutes-label>${cfg.dailyMinutes} хв</span>
+            <label for="anki-daily-minutes">Час на картки (хв на день)</label>
+            <input id="anki-daily-minutes" type="number" name="daily_minutes" min="5" max="240" value="${cfg.dailyMinutes}">
           </div>
           <div class="anki-preset-row">
-            ${[10, 20, 30, 45, 60].map(m => `<button type="button" class="anki-preset-btn ${cfg.dailyMinutes === m ? 'is-active' : ''}" data-preset-minutes="${m}">${m} хв</button>`).join('')}
-            <input id="anki-daily-minutes" type="number" name="daily_minutes" min="5" max="240" value="${cfg.dailyMinutes}" style="width:5.5rem;">
+            ${[10, 20, 30, 45, 60].map(m => `<button type="button" class="anki-preset-btn" aria-pressed="${cfg.dailyMinutes === m}" data-preset-minutes="${m}">${m} хв</button>`).join('')}
           </div>
-          <div class="anki-cal-preview" data-cal-preview>
-            ${esc(cal.explanation)}
-          </div>
+          <p class="anki-cal-preview" data-cal-preview>Розрахований ліміт нових карток на день — <strong>${cal.newCardsLimit}</strong></p>
         </section>
 
         <details class="anki-drawer anki-advanced-drawer">
-          <summary>⚙ Розширені параметри Anki / FSRS (кроки, ліміти, ваги)</summary>
+          <summary>${icon('settings')} Розширені параметри FSRS ${icon('chevron-down')}</summary>
           <div class="anki-settings-form">
             <label class="anki-field">
-              Ліміт нових карток / день
+              Нових карток на день
               <input type="number" name="new_cards_limit" min="0" max="100" value="${cfg.newCardsLimit}">
             </label>
             <label class="anki-field">
-              Макс. повторень / день
+              Повторень на день
               <input type="number" name="daily_limit" min="1" max="500" value="${cfg.dailyReviewLimit}">
             </label>
             <label class="anki-field">
-              Макс. інтервал (днів)
+              Максимальний інтервал (днів)
               <input type="number" name="maximum_interval" min="1" max="36500" value="${cfg.maximumInterval}">
             </label>
             <label class="anki-field">
-              Середній час картки (сек)
-              <input type="number" step="0.5" min="5" max="120" name="avg_seconds_per_card" value="${metrics.avgSecondsPerCard || cfg.avgSecondsPerCard}">
+              Час на одну картку (с)
+              <input type="number" step="any" min="5" max="120" name="avg_seconds_per_card" value="${metrics.avgSecondsPerCard || cfg.avgSecondsPerCard}">
             </label>
             <label class="anki-field">
-              Learning steps (хв, через кому)
+              Кроки вивчення (хв, через кому)
               <input type="text" name="learning_steps" value="${esc((cfg.learningSteps || [1, 10]).join(', '))}">
             </label>
             <label class="anki-field">
-              Relearning steps (хв, через кому)
+              Кроки повторного вивчення (хв, через кому)
               <input type="text" name="relearning_steps" value="${esc((cfg.relearningSteps || [10]).join(', '))}">
             </label>
-            <label class="anki-field" style="grid-column:1 / -1;">
-              FSRS ваги (w)
+            <label class="anki-field anki-form-wide">
+              Ваги FSRS
               <input type="text" name="fsrs_weights" value="${esc((cfg.weights || []).join(', '))}">
             </label>
-            <div style="grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:.8rem; align-items:center;">
+            <div class="anki-form-wide anki-form-options">
               <label class="anki-check-row">
                 <input type="checkbox" name="include_learned" ${cfg.includeLearned !== false ? 'checked' : ''}>
-                Включати вивчені дефініції
+                Включати вивчені картки
               </label>
               <label class="anki-check-row">
                 <input type="checkbox" name="include_new" ${cfg.includeNew !== false ? 'checked' : ''}>
                 Включати нові картки
               </label>
-              <button type="button" class="text-button" data-reset-fsrs-weights>Скинути FSRS за замовчуванням</button>
+              <button type="button" class="anki-text-action" data-reset-fsrs-weights>Відновити типові ваги</button>
             </div>
             ${courses.length ? `
-              <div class="anki-courses-box">
-                <span style="width:100%; font-size:.77rem; font-weight:700;">Фільтр курсів (порожньо = усі):</span>
+              <fieldset class="anki-form-wide anki-courses-box">
+                <legend>Курси для повторення</legend>
+                <p class="muted">Без вибору повторюються всі курси.</p>
                 ${courses.map(c => `
                   <label class="anki-check-row">
                     <input type="checkbox" name="course_ids" value="${Number(c.course_id)}" ${selectedCourses.has(Number(c.course_id)) ? 'checked' : ''}>
-                    ${esc(c.title)}
+                    ${esc(UI.courseName(c.title))}
                   </label>
                 `).join('')}
-              </div>
+              </fieldset>
             ` : ''}
           </div>
         </details>
 
         <div class="anki-modal-footer">
           <button type="button" class="secondary" data-close-anki-modal>Скасувати</button>
-          <button type="submit" class="primary">Зберегти та відкалібрувати</button>
+          <button type="submit" class="primary">Зберегти</button>
         </div>
         <p id="dialog-error" class="field-error" role="alert" hidden></p>
       </form>
@@ -678,14 +648,18 @@
     const form = body.querySelector('[data-anki-calibration-form]');
     let manualNewOverride = false;
 
+    form.addEventListener('invalid', event => {
+      const drawer = event.target.closest('details');
+      if (drawer) drawer.open = true;
+    }, true);
+
     function recalibrateLive() {
       const retPct = Number(form.elements.target_retention_pct.value || 90);
       const mins = Number(form.elements.daily_minutes.value || 20);
       const secPer = Number(form.elements.avg_seconds_per_card.value || 18);
       form.querySelector('[data-cal-retention-label]').textContent = `${retPct}%`;
-      form.querySelector('[data-cal-minutes-label]').textContent = `${mins} хв`;
-      form.querySelectorAll('[data-preset-retention]').forEach(b => b.classList.toggle('is-active', Number(b.dataset.presetRetention) === retPct));
-      form.querySelectorAll('[data-preset-minutes]').forEach(b => b.classList.toggle('is-active', Number(b.dataset.presetMinutes) === mins));
+      form.querySelectorAll('[data-preset-retention]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.presetRetention) === retPct)));
+      form.querySelectorAll('[data-preset-minutes]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.presetMinutes) === mins)));
 
       if (srs) {
         const nextCal = srs.calibrateGoalAndTime({
@@ -697,7 +671,7 @@
         if (!manualNewOverride) {
           form.elements.new_cards_limit.value = String(nextCal.newCardsLimit);
         }
-        form.querySelector('[data-cal-preview]').textContent = nextCal.explanation;
+        form.querySelector('[data-cal-preview] strong').textContent = nextCal.newCardsLimit;
       }
     }
 
@@ -790,7 +764,7 @@
           courseIds,
         });
         dialog.close();
-        UI.toast?.('Ціль навчання та параметри FSRS оновлено.');
+        UI.toast?.('Налаштування Anki збережено.');
         if (activeDashboardHost?.isConnected) drawDashboardWidget(activeDashboardHost, lastSession);
         if (activePageHost?.isConnected) {
           if (activePageHost.querySelector('[data-anki-study-view]')) {
@@ -809,23 +783,36 @@
       }
     });
 
-    if (!dialog.open) dialog.showModal();
+    if (!dialog.open) {
+      dialog.showModal();
+      const modalWindow = modalDocument.defaultView;
+      const closeOnNavigation = () => dialog.close();
+      modalWindow.addEventListener('hashchange', closeOnNavigation, { once: true });
+      dialog.addEventListener('close', () => {
+        modalWindow.removeEventListener('hashchange', closeOnNavigation);
+        if (!trigger || frame && !frame.isConnected) return;
+        const button = trigger.isConnected ? trigger : document.querySelector('[data-anki-open-settings]');
+        button?.focus({ preventScroll: true });
+      }, { once: true });
+    }
   }
 
   // ==========================================================================
   // 5. Event Listeners, Keyboard Navigation & Public Mount API
   // ==========================================================================
+  function revealStudyCard() {
+    studyState.revealed = true;
+    renderStudyView(activePageHost, lastSession, '#anki-face-label');
+  }
+
   function bindSharedHandlers(host) {
     if (!host || host.dataset.ankiBound) return;
     host.dataset.ankiBound = '1';
 
     host.addEventListener('click', async (event) => {
-      if (event.target.closest('[data-anki-theme-toggle]')) {
-        const next = getThemePreference() === 'dark' ? 'light' : 'dark';
-        applyTheme(host, next);
-        if (activeDashboardHost) applyTheme(activeDashboardHost, next);
-        if (activePageHost?.querySelector('[data-anki-study-view]')) renderStudyView(activePageHost, lastSession);
-        else if (activePageHost?.querySelector('[data-anki-overview-page]')) renderCourseOverviewPage(activePageHost, lastSession);
+      if (event.target.closest('[data-anki-retry]')) {
+        if (host.matches('[data-today-anki]')) mount(host.parentElement, activeAccount);
+        else mountPage(host, activeAccount);
         return;
       }
 
@@ -834,35 +821,16 @@
         return;
       }
 
-      if (event.target.closest('[data-anki-open-overview]')) {
-        navigateToAnki('');
-        return;
-      }
-
-      if (event.target.closest('[data-anki-start-review]')) {
-        navigateToAnki('study');
-        return;
-      }
-
-      const studyCourseBtn = event.target.closest('[data-anki-study-course]');
-      if (studyCourseBtn) {
-        const cid = studyCourseBtn.dataset.ankiStudyCourse;
-        const cram = studyCourseBtn.dataset.practiceAll === '1';
-        navigateToAnki(`study/${cid}${cram ? '?all=1' : ''}`);
-        return;
-      }
-
       const cramBtn = event.target.closest('[data-anki-cram-course]');
       if (cramBtn) {
         const cid = cramBtn.dataset.ankiCramCourse ? Number(cramBtn.dataset.ankiCramCourse) : null;
         initStudySession(lastSession, cid, true);
-        renderStudyView(activePageHost, lastSession);
+        renderStudyView(activePageHost, lastSession, 'h1');
         return;
       }
 
       if (event.target.closest('[data-anki-study-reveal]')) {
-        studyState.revealed = true;
-        renderStudyView(activePageHost, lastSession);
+        revealStudyCard();
         return;
       }
 
@@ -887,7 +855,7 @@
           if (studyState.queue[studyState.idx]?.id === key) {
             studyState.queue[studyState.idx].isLearned = nextLearned;
           }
-          if (activePageHost?.querySelector('[data-anki-study-view]')) renderStudyView(activePageHost, lastSession);
+          if (activePageHost?.querySelector('[data-anki-study-view]')) renderStudyView(activePageHost, lastSession, '[data-anki-toggle-learned]');
           else if (activePageHost?.querySelector('[data-anki-overview-page]')) renderCourseOverviewPage(activePageHost, lastSession);
           if (activeDashboardHost?.isConnected) drawDashboardWidget(activeDashboardHost, lastSession);
           UI.toast?.(nextLearned ? 'Позначено як вивчену для Anki.' : 'Позначку вивченої знято.');
@@ -908,18 +876,16 @@
             body: JSON.stringify({ card_key: unlearnBtn.dataset.ankiUnlearn, learned: false }),
           });
           lastSession = res.session;
-          if (activePageHost?.querySelector('[data-anki-overview-page]')) renderCourseOverviewPage(activePageHost, lastSession);
+          if (activePageHost?.querySelector('[data-anki-overview-page]')) {
+            renderCourseOverviewPage(activePageHost, lastSession);
+            activePageHost.querySelector('[data-anki-learned-drawer] summary')?.focus({ preventScroll: true });
+          }
           if (activeDashboardHost?.isConnected) drawDashboardWidget(activeDashboardHost, lastSession);
         } catch (err) {
           UI.toast?.(err.message);
           unlearnBtn.disabled = false;
         }
         return;
-      }
-
-      const summaryCard = event.target.closest('[data-anki-summary-card]');
-      if (summaryCard && !event.target.closest('button,a,input,select,label')) {
-        navigateToAnki('');
       }
     });
 
@@ -938,7 +904,11 @@
           body: JSON.stringify({ front, back, course_id: courseId, is_learned: false }),
         });
         lastSession = res.session;
-        if (activePageHost?.querySelector('[data-anki-overview-page]')) renderCourseOverviewPage(activePageHost, lastSession);
+        addForm.reset();
+        if (activePageHost?.querySelector('[data-anki-overview-page]')) {
+          renderCourseOverviewPage(activePageHost, lastSession);
+          activePageHost.querySelector('[data-anki-add-form] [name="front"]')?.focus({ preventScroll: true });
+        }
         if (activeDashboardHost?.isConnected) drawDashboardWidget(activeDashboardHost, lastSession);
         UI.toast?.('Картку додано до колоди Anki.');
       } catch (err) {
@@ -964,11 +934,9 @@
     if (studyState.complete || !studyState.queue[studyState.idx]) return;
 
     if (event.code === 'Space' || event.key === ' ') {
+      if (event.target.closest?.('button:not([data-anki-study-reveal]), a, summary')) return;
       event.preventDefault();
-      if (!studyState.revealed) {
-        studyState.revealed = true;
-        renderStudyView(activePageHost, lastSession);
-      }
+      if (!studyState.revealed) revealStudyCard();
       return;
     }
 
@@ -990,6 +958,21 @@
     return data;
   }
 
+  function renderLoadState(host, isDashboard, message) {
+    host.innerHTML = `
+      <div class="anki-load-state ${isDashboard ? 'anki-summary-card' : 'anki-page'}">
+        <div class="anki-summary-main">
+          <span class="anki-symbol">${icon('cards')}</span>
+          <div>
+            ${isDashboard ? '<h2>Картки Anki</h2>' : '<h1>Картки Anki</h1>'}
+            ${message ? `<p role="alert">${esc(message)}</p>` : '<p role="status">Завантажуємо картки…</p>'}
+          </div>
+        </div>
+        ${message ? '<button type="button" class="secondary" data-anki-retry>Спробувати ще раз</button>' : ''}
+      </div>
+    `;
+  }
+
   async function mount(root, account) {
     if (account) activeAccount = account;
     const host = root?.querySelector('[data-today-anki]');
@@ -1000,7 +983,7 @@
     if (lastSession) {
       drawDashboardWidget(host, lastSession);
     } else {
-      host.innerHTML = `<div class="anki-summary-card"><p class="muted" role="status" style="margin:0;">Завантажуємо інтервальне повторення Anki…</p></div>`;
+      renderLoadState(host, true);
     }
 
     try {
@@ -1008,7 +991,7 @@
       if (host.isConnected) drawDashboardWidget(host, data);
     } catch (err) {
       if (host.isConnected) {
-        host.innerHTML = `<div class="anki-summary-card"><p role="alert" class="field-error" style="margin:0;">${esc(err.message)}</p></div>`;
+        renderLoadState(host, true, err.message);
       }
     }
   }
@@ -1018,26 +1001,27 @@
     activePageHost = main;
     bindSharedHandlers(main);
 
-    const [path, query = ''] = location.hash.slice(1).split('?');
+    const hash = location.hash;
+    const [path, query = ''] = hash.slice(1).split('?');
     const parts = path.split('/');
     const params = new URLSearchParams(query);
     const isStudy = parts[1] === 'study';
     const courseId = isStudy && parts[2] !== undefined && parts[2] !== '' && /^\d+$/.test(parts[2]) ? Number(parts[2]) : null;
     const practiceAll = params.get('all') === '1';
 
-    main.innerHTML = `<div class="anki-page"><p class="muted" role="status">Завантажуємо колоди Anki…</p></div>`;
+    renderLoadState(main, false);
     try {
       const session = await refreshSession(null, practiceAll);
-      if (!main.isConnected) return;
+      if (!main.isConnected || location.hash !== hash) return;
       if (isStudy) {
         initStudySession(session, courseId, practiceAll);
-        renderStudyView(main, session);
+        renderStudyView(main, session, 'h1');
       } else {
         renderCourseOverviewPage(main, session);
       }
     } catch (err) {
-      if (main.isConnected) {
-        main.innerHTML = `<div class="anki-page"><p role="alert" class="field-error">${esc(err.message)}</p></div>`;
+      if (main.isConnected && location.hash === hash) {
+        renderLoadState(main, false, err.message);
       }
     }
   }

@@ -200,7 +200,7 @@ async def paper_workspace(request: Request, response: Response):
     calendar_assets = (
         '<link rel="stylesheet" href="/hustle/calendar.css?v=34204267">'
         '<link rel="stylesheet" href="calendar-connected.css?v=c478c5e2">'
-        '<script defer src="/hustle/ui.js?v=9c612aef"></script>'
+        '<script defer src="/hustle/ui.js?v=9345942e"></script>'
         '<link rel="stylesheet" href="/prototype/topic-flashcards.css?v=be5715b0">'
         '<script defer src="/prototype/topic-flashcards.js?v=b122226a"></script>'
         '<script defer src="/hustle/calendar.js?v=80b44a60"></script>'
@@ -211,11 +211,11 @@ async def paper_workspace(request: Request, response: Response):
         '<script defer src="paper-workspace.js?v=7ba731e1"></script>'
         '<script defer src="calendar-connected.js?v=69542340"></script>'
         '<link rel="stylesheet" href="/hustle/oral-defense.css">'
-        '<link rel="stylesheet" href="/hustle/anki-dashboard.css?v=20261119b">'
+        '<link rel="stylesheet" href="/hustle/anki-dashboard.css?v=8dd88c40">'
         '<script defer src="/hustle/oral-defense.js"></script>'
         '<script defer src="oral-practice.js?v=4653901e"></script>'
         '<script defer src="/hustle/vendor/srs-engine.js?v=20261119b"></script>'
-        '<script defer src="/hustle/anki-dashboard.js?v=20261119b"></script>'
+        '<script defer src="/hustle/anki-dashboard.js?v=d643651e"></script>'
     )
     return page.replace("<!-- connected-calendar -->", calendar_assets)
 

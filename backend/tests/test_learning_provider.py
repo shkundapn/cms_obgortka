@@ -278,6 +278,24 @@ async def test_generation_failure_is_not_a_template_and_does_not_log_key(monkeyp
     assert key not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_transient_429_retries_with_retry_after_and_succeeds(monkeypatch):
+    calls = 0
+
+    def handle(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, headers={"Retry-After": "0.05"}, json={"error": {"message": "Rate limit"}})
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "OK"}]}}]})
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(handle), **kwargs))
+    out = await GeminiService(api_key="test-retry-key-123").generate_content("Ping")
+    assert out == "OK"
+    assert calls == 2
+
+
 def test_prepare_topic_requires_key_and_owner(context):
     client, store = context
     bundle = seed(client)

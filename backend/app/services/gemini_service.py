@@ -1,9 +1,12 @@
+import asyncio
 import json
 import logging
 import os
+import random
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
+import weakref
 import httpx
 
 from app.config import get_settings
@@ -12,6 +15,32 @@ from app.services.learning_provider import current_provider, LearningProviderErr
 logger = logging.getLogger("gemini_service")
 
 _VERTEX_TOKEN_CACHE: Dict[str, Any] = {"token": None, "expires_at": 0.0}
+_GEMINI_SEMAPHORES: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = weakref.WeakKeyDictionary()
+
+
+def _get_gemini_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _GEMINI_SEMAPHORES.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(2)
+        _GEMINI_SEMAPHORES[loop] = sem
+    return sem
+
+
+def _retry_delay_seconds(resp: Optional[httpx.Response], retry_index: int) -> float:
+    base_delays = (1.0, 2.5, 5.0)
+    default_delay = base_delays[min(retry_index, len(base_delays) - 1)] + random.uniform(0.05, 0.35)
+    if resp is None:
+        return default_delay
+    raw_after = (resp.headers.get("Retry-After") or "").strip()
+    if raw_after:
+        try:
+            parsed = float(raw_after)
+            if 0 < parsed <= 15.0:
+                return parsed
+        except ValueError:
+            pass
+    return default_delay
 
 
 class GeminiService:
@@ -117,40 +146,61 @@ class GeminiService:
             payload["generationConfig"]["responseMimeType"] = "application/json"
 
         should_raise = self.strict or raise_on_error
+        provider_kind = "vertex" if self.vertex_project else "studio"
         try:
-            if self.vertex_project:
-                host = (
-                    "aiplatform.googleapis.com"
-                    if self.vertex_location == "global"
-                    else f"{self.vertex_location}-aiplatform.googleapis.com"
-                )
-                url = (
-                    f"https://{host}/v1/projects/{self.vertex_project}/locations/"
-                    f"{self.vertex_location}/publishers/google/models/{self.model}:generateContent"
-                )
+            async with _get_gemini_semaphore():
                 resp = None
-                for attempt in range(2):
-                    tok = await self._get_vertex_token(force_refresh=(attempt == 1))
-                    if not tok:
-                        if should_raise:
-                            raise LearningProviderError("Не вдалося отримати токен Vertex AI на сервері.")
-                        return None
-                    headers = {
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {tok}",
-                        "X-Goog-User-Project": self.vertex_project,
-                    }
+                token_refreshed = False
+                rate_retries = 0
+                max_rate_retries = 3
+                while True:
+                    if self.vertex_project:
+                        host = (
+                            "aiplatform.googleapis.com"
+                            if self.vertex_location == "global"
+                            else f"{self.vertex_location}-aiplatform.googleapis.com"
+                        )
+                        url = (
+                            f"https://{host}/v1/projects/{self.vertex_project}/locations/"
+                            f"{self.vertex_location}/publishers/google/models/{self.model}:generateContent"
+                        )
+                        tok = await self._get_vertex_token(force_refresh=token_refreshed)
+                        if not tok:
+                            if should_raise:
+                                raise LearningProviderError("Не вдалося отримати токен Vertex AI на сервері.")
+                            return None
+                        headers = {
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {tok}",
+                            "X-Goog-User-Project": self.vertex_project,
+                        }
+                    else:
+                        url = f"{self.BASE_URL}/{self.model}:generateContent"
+                        headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
+
                     async with httpx.AsyncClient(timeout=timeout) as client:
                         resp = await client.post(url, json=payload, headers=headers)
-                    if resp.status_code == 401 and attempt == 0:
+
+                    if self.vertex_project and resp.status_code == 401 and not token_refreshed:
                         _VERTEX_TOKEN_CACHE["token"] = None
+                        token_refreshed = True
+                        continue
+
+                    if resp.status_code in (429, 503) and rate_retries < max_rate_retries:
+                        delay = _retry_delay_seconds(resp, rate_retries)
+                        rate_retries += 1
+                        logger.warning(
+                            "Gemini API (%s, model=%s) returned HTTP %s; retrying in %.2fs (attempt %d/%d)",
+                            provider_kind,
+                            self.model,
+                            resp.status_code,
+                            delay,
+                            rate_retries,
+                            max_rate_retries,
+                        )
+                        await asyncio.sleep(delay)
                         continue
                     break
-            else:
-                url = f"{self.BASE_URL}/{self.model}:generateContent"
-                headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.post(url, json=payload, headers=headers)
 
             if resp is None or resp.status_code != 200:
                 code = resp.status_code if resp is not None else 502
@@ -164,8 +214,7 @@ class GeminiService:
                     if self.api_key and self.api_key in safe_detail:
                         safe_detail = safe_detail.replace(self.api_key, "[redacted]")
                     safe_detail = safe_detail[:160]
-                provider_kind = "vertex" if self.vertex_project else "studio"
-                logger.warning("Gemini API (%s) returned HTTP %s%s", provider_kind, code, f": {safe_detail}" if safe_detail else "")
+                logger.warning("Gemini API (%s, model=%s) returned HTTP %s%s", provider_kind, self.model, code, f": {safe_detail}" if safe_detail else "")
                 if should_raise:
                     raise provider_http_error(code, source=provider_kind, detail=safe_detail if code == 400 else "")
                 return None

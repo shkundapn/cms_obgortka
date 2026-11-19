@@ -24,6 +24,8 @@
   if (!Array.isArray(state.records) || !Array.isArray(state.sessions) || !state.timer || !Number.isFinite(state.timer.remaining)) state = { ...state, records: [], sessions: [], timer: newTimer() };
   // Carry earlier prototype completion forward without changing its saved values.
   if (!saved.anchor) Object.entries(H.state.completed).forEach(([key, done]) => { if (done) { const [course,,kind] = key.split(':'); state.completed[`${course}:${kind}`] = true; } });
+  const rewards = window.HustleRewards;
+  rewards?.setLegacy((course) => Object.values(state.awards).filter(award => !course || award.course === course).reduce((sum, award) => sum + award.points, 0));
   H.calendar?.init(state.anchor);
   let reward = null, lastPracticeCourse;
   let selectedDate = today(), month = today().slice(0, 7) + '-01', activePractice = null, lastActivity = Date.now(), toastTimeout;
@@ -142,10 +144,11 @@
   function metrics(course) {
     const id = course?.id, p = progress(id), days = activityDays(id), week = Array.from({ length: 7 }, (_, i) => C.addDays(today(), i - 6));
     const seconds = C.sum(state.records, { course: id, from: today(), to: today() });
-    const xp = Object.values(state.awards).filter(a => !id || a.course === id).reduce((n, a) => n + a.points, 0);
+    const earned = rewards?.totals(undefined, id);
+    const xp = earned?.xp ?? Object.values(state.awards).filter(a => !id || a.course === id).reduce((n, a) => n + a.points, 0);
     let streak = 0, cursor = days.has(today()) ? today() : C.addDays(today(), -1);
     while (days.has(cursor)) { streak++; cursor = C.addDays(cursor, -1); }
-    return `<section class="learning-strip" aria-label="Навчальна статистика"><div class="daily-focus-stat"><span class="tiny-goal-ring" style="--goal:${Math.min(100, seconds / (H.state.minutes * 60) * 100)}%" aria-hidden="true">${icon('clock')}</span><div><strong data-stat-today>${C.secondsLabel(seconds)}</strong><span>сьогодні / ${H.state.minutes} хв</span></div></div><div class="strip-stat"><strong data-stat-week>${C.secondsLabel(C.sum(state.records, { course: id, from: C.addDays(today(), -6), to: today() }))}</strong><span>за 7 днів</span></div><div class="strip-stat plan-stat"><strong>${p.done}<em> / ${p.total}</em></strong><span>завдань виконано</span><div class="small-progress" role="progressbar" aria-label="Прогрес плану" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p.percent}"><i style="width:${p.percent}%"></i></div></div><div class="streak-stat"><div><strong>${streak}</strong><span>днів поспіль</span></div><div class="streak-trail" aria-label="Навчальні дні за тиждень">${week.map(day => `<span class="${days.has(day) ? 'studied' : ''} ${day === today() ? 'trail-today' : ''}" title="${dateText(day)}${days.has(day) ? ': навчався' : ''}">${days.has(day) ? '✓' : '·'}</span>`).join('')}</div></div><div class="xp-stat" title="10 XP за нове завершене завдання · 25 XP за Pomodoro"><span class="xp-star" aria-hidden="true">✦</span><div><strong>${xp} XP</strong><span>Рівень ${Math.floor(xp / 100) + 1}</span></div></div></section>`;
+    return `<section class="learning-strip" aria-label="Навчальна статистика"><div class="daily-focus-stat"><span class="tiny-goal-ring" style="--goal:${Math.min(100, seconds / (H.state.minutes * 60) * 100)}%" aria-hidden="true">${icon('clock')}</span><div><strong data-stat-today>${C.secondsLabel(seconds)}</strong><span>сьогодні / ${H.state.minutes} хв</span></div></div><div class="strip-stat"><strong data-stat-week>${C.secondsLabel(C.sum(state.records, { course: id, from: C.addDays(today(), -6), to: today() }))}</strong><span>за 7 днів</span></div><div class="strip-stat plan-stat"><strong>${p.done}<em> / ${p.total}</em></strong><span>завдань виконано</span><div class="small-progress" role="progressbar" aria-label="Прогрес плану" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p.percent}"><i style="width:${p.percent}%"></i></div></div><div class="streak-stat"><div><strong>${streak}</strong><span>днів поспіль</span></div><div class="streak-trail" aria-label="Навчальні дні за тиждень">${week.map(day => `<span class="${days.has(day) ? 'studied' : ''} ${day === today() ? 'trail-today' : ''}" title="${dateText(day)}${days.has(day) ? ': навчався' : ''}">${days.has(day) ? '✓' : '·'}</span>`).join('')}</div></div><div class="xp-stat" title="${earned ? 'Досвід за практику й Pomodoro' : '10 XP за нове завершене завдання · 25 XP за Pomodoro'}"><span class="xp-star" aria-hidden="true">✦</span><div><strong>${xp} XP</strong><span>Рівень ${earned?.level ?? Math.floor(xp / 100) + 1}</span></div></div></section>`;
   }
   function focusCard(course, next) {
     if (!next && !tasks(course?.id).length) {
@@ -323,9 +326,11 @@
     const header = course ? H.workspace.courseHeader(course) :
       heading('Мій огляд', H.liveCalendar?.inboxButton() || H.calendar.button());
     const addCourse = !course && !selected().length ? H.workspace.add : '';
+    const focusCourse = rewards?.preferred(selected(), list.find((task) => !task.done)?.course.id || selected()[0]?.id);
     return `${header}${H.workspace.notice()}
-      <div class="dashboard-layout desk-layout compact-desk-layout study-overview-layout">
+      <div class="dashboard-layout desk-layout compact-desk-layout study-overview-layout${!course && rewards ? ' has-reward-journey' : ''}">
         ${metrics(course)}
+        ${!course ? rewards?.panel(focusCourse) || '' : ''}
         <div class="dashboard-main">
           ${addCourse ? `<div>${addCourse}</div>` : ''}
           ${course ? studyShortcuts(course) : ''}
@@ -385,6 +390,14 @@
     if (location.hash === '#focus') history.replaceState(null, '', '#' + pomodoroRoute);
     const hash = location.hash.slice(1) || 'plan', course = hash.startsWith('course/') ? courseById(hash.split('/')[1]) : null;
     main.toggleAttribute('data-dashboard-overview', hash === 'plan');
+    if (rewards && ['rewards', 'rewards/collection'].includes(hash)) {
+      const title = hash === 'rewards' ? 'Нагороди' : 'Колекція осликів';
+      document.title = `${title} — Hustle`;
+      document.querySelector('#view-name').textContent = title;
+      document.querySelectorAll('[data-nav],.sidebar-course').forEach(link => link.removeAttribute('aria-current'));
+      main.innerHTML = rewards.renderShop(hash);
+      return true;
+    }
     if (H.workspace && (hash === 'deadlines' || course?.connected && hash === 'course/' + course.id + '/assignments')) {
       document.title = 'Дедлайни — Hustle';
       if (!course) document.querySelector('#view-name').textContent = 'Дедлайни';
@@ -429,6 +442,7 @@
     window.HustleTopicCards?.mountOverview(main);
     H.liveCalendar?.mount(hash, month, selectedDate, course);
     window.HustleAnki?.mount?.(main, H.account ? { owner_id: H.account.owner } : undefined);
+    rewards?.mount(main, hash === 'plan' && H.workspace ? tasks().sort((a, b) => deadlineTimeOrder(a, b, Date.now())) : []);
     fire.mount(main); paintTimer(); return true;
   }
   function refresh(focusSelector) {
@@ -536,6 +550,7 @@
           ? `[data-dash-complete="${CSS.escape(next.dataset.dashComplete)}"]`
           : '.deadline-completed > summary';
         announce('Дедлайн позначено виконаним.');
+        rewards?.earnDeadline(tasks().find(task => task.id === id));
       } else if (deadline) announce('Позначку виконання знято.');
       const check = refresh(selector);
       if (deadline) check?.scrollIntoView({block: 'nearest'});

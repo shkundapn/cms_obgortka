@@ -146,11 +146,14 @@
   function metrics(course) {
     const id = course?.id, p = progress(id), days = activityDays(id), week = Array.from({ length: 7 }, (_, i) => C.addDays(today(), i - 6));
     const seconds = C.sum(state.records, { course: id, from: today(), to: today() });
-    const earned = rewards?.totals(undefined, id);
-    const xp = earned?.xp ?? Object.values(state.awards).filter(a => !id || a.course === id).reduce((n, a) => n + a.points, 0);
+    let xpStat = '';
+    if (!rewards) {
+      const xp = Object.values(state.awards).filter(a => !id || a.course === id).reduce((n, a) => n + a.points, 0);
+      xpStat = `<div class="xp-stat" title="10 XP за нове завершене завдання · 25 XP за Pomodoro"><span class="xp-star" aria-hidden="true">✦</span><div><strong>${xp} XP</strong><span>Рівень ${Math.floor(xp / 100) + 1}</span></div></div>`;
+    }
     let streak = 0, cursor = days.has(today()) ? today() : C.addDays(today(), -1);
     while (days.has(cursor)) { streak++; cursor = C.addDays(cursor, -1); }
-    return `<section class="learning-strip" aria-label="Навчальна статистика"><div class="daily-focus-stat"><span class="tiny-goal-ring" style="--goal:${Math.min(100, seconds / (H.state.minutes * 60) * 100)}%" aria-hidden="true">${icon('clock')}</span><div><strong data-stat-today>${C.secondsLabel(seconds)}</strong><span>сьогодні / ${H.state.minutes} хв</span></div></div><div class="strip-stat"><strong data-stat-week>${C.secondsLabel(C.sum(state.records, { course: id, from: C.addDays(today(), -6), to: today() }))}</strong><span>за 7 днів</span></div><div class="strip-stat plan-stat"><strong>${p.done}<em> / ${p.total}</em></strong><span>завдань виконано</span><div class="small-progress" role="progressbar" aria-label="Прогрес плану" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p.percent}"><i style="width:${p.percent}%"></i></div></div><div class="streak-stat"><div><strong>${streak}</strong><span>днів поспіль</span></div><div class="streak-trail" aria-label="Навчальні дні за тиждень">${week.map(day => `<span class="${days.has(day) ? 'studied' : ''} ${day === today() ? 'trail-today' : ''}" title="${dateText(day)}${days.has(day) ? ': навчався' : ''}">${days.has(day) ? '✓' : '·'}</span>`).join('')}</div></div><div class="xp-stat" title="${earned ? 'Досвід за практику й Pomodoro' : '10 XP за нове завершене завдання · 25 XP за Pomodoro'}"><span class="xp-star" aria-hidden="true">✦</span><div><strong>${xp} XP</strong><span>Рівень ${earned?.level ?? Math.floor(xp / 100) + 1}</span></div></div></section>`;
+    return `<section class="learning-strip" aria-label="Навчальна статистика"><div class="daily-focus-stat"><span class="tiny-goal-ring" style="--goal:${Math.min(100, seconds / (H.state.minutes * 60) * 100)}%" aria-hidden="true">${icon('clock')}</span><div><strong data-stat-today>${C.secondsLabel(seconds)}</strong><span>сьогодні / ${H.state.minutes} хв</span></div></div><div class="strip-stat"><strong data-stat-week>${C.secondsLabel(C.sum(state.records, { course: id, from: C.addDays(today(), -6), to: today() }))}</strong><span>за 7 днів</span></div><div class="strip-stat plan-stat"><strong>${p.done}<em> / ${p.total}</em></strong><span>завдань виконано</span><div class="small-progress" role="progressbar" aria-label="Прогрес плану" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p.percent}"><i style="width:${p.percent}%"></i></div></div><div class="streak-stat"><div><strong>${streak}</strong><span>днів поспіль</span></div><div class="streak-trail" aria-label="Навчальні дні за тиждень">${week.map(day => `<span class="${days.has(day) ? 'studied' : ''} ${day === today() ? 'trail-today' : ''}" title="${dateText(day)}${days.has(day) ? ': навчався' : ''}">${days.has(day) ? '✓' : '·'}</span>`).join('')}</div></div>${xpStat}</section>`;
   }
   function focusCard(course, next) {
     if (!next && !tasks(course?.id).length) {
@@ -318,14 +321,10 @@
   }
   function studyShortcuts(course) {
     const route = '#course/' + encodeURIComponent(course.id);
-    return `<nav class="study-shortcuts" aria-label="Практика предмета">
-      <a class="study-shortcut study-shortcut--cards" href="${route}/cards">
-        <span class="study-shortcut-icon" aria-hidden="true">${icon('courses')}</span>
-        <strong>Картки</strong><span class="study-shortcut-arrow" aria-hidden="true">${icon('arrow')}</span>
-      </a>
-      <a class="study-shortcut study-shortcut--quiz" href="${route}/quizzes">
-        <span class="study-shortcut-icon" aria-hidden="true">${icon('practice')}</span>
-        <strong>Самоперевірка</strong><span class="study-shortcut-arrow" aria-hidden="true">${icon('arrow')}</span>
+    return `<nav class="study-shortcuts" aria-label="Швидкі дії предмета">
+      <a class="study-shortcut study-shortcut--materials" href="${route}/materials">
+        <span class="study-shortcut-icon" aria-hidden="true">${icon('files')}</span>
+        <strong>Матеріали курсу</strong><span class="study-shortcut-arrow" aria-hidden="true">${icon('arrow')}</span>
       </a>
       <button type="button" class="study-shortcut study-shortcut--oral" data-paper-oral="${esc(course.id)}">
         <span class="study-shortcut-icon" aria-hidden="true">${icon('speech')}</span>
@@ -355,7 +354,7 @@
             </div>
             ${deadlineList(list, !course, { limit: 3, showDetails: Boolean(course) })}
           </section>
-          ${course ? window.HustleTopicCards?.overview(course.id) || '' : (window.HustleAnki ? '<section class="today-anki" data-today-anki aria-label="Картки інтервального повторення Anki"></section>' : '')}
+          ${window.HustleAnki ? `<section class="today-anki" data-today-anki${course ? ` data-anki-course="${esc(course.id)}"` : ''} aria-label="Картки інтервального повторення Anki"></section>` : ''}
         </div>
         <aside class="dashboard-aside">
           ${showJourney ? '' : activity}

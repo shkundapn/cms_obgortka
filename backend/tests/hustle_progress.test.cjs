@@ -53,12 +53,12 @@ test('describeEndpoint returns clear Ukrainian descriptions for long-running end
   assert.match(progress.describeEndpoint('/api/workspace/courses/1/topics/2/oral-defense/evaluate'), /AI-екзаменатор/);
 });
 
-test('short requests stay quiet and overlapping work shares one spinner', (t) => {
+test('short requests stay quiet and overlapping work shares one progress bar', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
   const nodes = [];
   const document = {
     body: { append: (...elements) => nodes.push(...elements) },
-    createElement: () => ({ setAttribute() {} }),
+    createElement: () => ({ dataset: {}, setAttribute() {} }),
   };
   const window = {};
   runInNewContext(progressSource, { window, document, Date, setTimeout, clearTimeout, setInterval, clearInterval });
@@ -68,26 +68,29 @@ test('short requests stay quiet and overlapping work shares one spinner', (t) =>
   t.mock.timers.tick(150);
   finishQuick();
   t.mock.timers.tick(600);
-  const spinner = nodes.find(node => node.className === 'hp-page-spinner');
-  assert.equal(spinner.hidden, true);
+  const bar = nodes.find(node => node.className === 'hp-page-progress');
+  const isActive = () => bar.dataset.active === 'true';
+  assert.equal(isActive(), false);
 
   const finishFirst = trackRequest('/api/assignments');
   let connected = true;
   trackPageActivity('Відкриваємо курс…', () => connected);
-  t.mock.timers.tick(550);
-  assert.equal(spinner.hidden, false);
-  assert.equal(nodes.filter(node => node.className === 'hp-page-spinner').length, 1);
+  t.mock.timers.tick(179);
+  assert.equal(isActive(), false);
+  t.mock.timers.tick(1);
+  assert.equal(isActive(), true);
+  assert.equal(nodes.filter(node => node.className === 'hp-page-progress').length, 1);
   finishFirst();
   t.mock.timers.tick(600);
-  assert.equal(spinner.hidden, false);
+  assert.equal(isActive(), true);
 
   connected = false;
   t.mock.timers.tick(400);
   const finishJoined = trackRequest('/api/workspace/courses');
-  assert.equal(spinner.hidden, false);
+  assert.equal(isActive(), true);
   finishJoined();
   t.mock.timers.tick(400);
-  assert.equal(spinner.hidden, true);
+  assert.equal(isActive(), false);
 });
 
 const uiSource = readFileSync(require.resolve('../../frontend/hustle/ui.js'), 'utf8');

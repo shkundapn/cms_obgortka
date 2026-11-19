@@ -199,24 +199,54 @@ progress.loading-spinner:indeterminate {
   }
 }
 
-.hp-page-spinner {
+.hp-page-progress {
   position: fixed;
-  z-index: 100;
-  inset-inline-end: max(1rem, env(safe-area-inset-right));
-  inset-block-end: max(1rem, env(safe-area-inset-bottom));
-  display: grid;
-  place-items: center;
-  width: 2.65rem;
-  height: 2.65rem;
-  border: 1px solid #e1d4e5;
-  border-radius: 50%;
-  background: #fffdf8;
-  box-shadow: 0 4px 16px #381b391a;
+  z-index: 140;
+  inset-block-start: env(safe-area-inset-top, 0px);
+  inset-inline: 0;
+  block-size: 5px;
+  overflow: hidden;
+  background: #e4d7e8;
+  visibility: hidden;
+  opacity: 0;
   pointer-events: none;
+  transition: opacity .16s ease-out, visibility 0s .16s;
 }
 
-.hp-page-spinner[hidden], .hp-status[hidden] { display: none; }
-.hp-page-spinner .loading-spinner { --size: 1.2rem; }
+.hp-page-progress[data-active="true"] {
+  visibility: visible;
+  opacity: 1;
+  transition-delay: 0s;
+}
+
+.hp-page-progress::before {
+  content: "";
+  display: block;
+  inline-size: 36%;
+  block-size: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #b698c0, #674074);
+  animation: hp-page-progress-slide 1.65s ease-in-out infinite paused;
+}
+
+.hp-page-progress[data-active="true"]::before { animation-play-state: running; }
+
+@keyframes hp-page-progress-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(278%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hp-page-progress { transition: none; }
+  .hp-page-progress::before { animation: none; }
+}
+
+@media (forced-colors: active) {
+  .hp-page-progress { forced-color-adjust: none; background: Canvas; }
+  .hp-page-progress::before { background: Highlight; }
+}
+
+.hp-status[hidden] { display: none; }
 
 .hp-screen-reader-status {
   position: absolute;

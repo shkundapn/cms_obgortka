@@ -152,9 +152,9 @@ async def open_workspace(request: Request):
 @app.get("/hustle/tools.html", response_class=HTMLResponse, include_in_schema=False)
 async def course_tools():
     source = (Path(hustle_dir) / "app.html").read_text(encoding="utf-8")
-    return HTMLResponse(source.replace("<head>", '<head><link rel="stylesheet" href="/prototype/course-tools.css?v=38c95bf0">'
+    return HTMLResponse(source.replace("<head>", '<head><link rel="stylesheet" href="/prototype/course-tools.css?v=20261119-embedded-dialog">'
                                        '<link rel="stylesheet" href="/prototype/rewards.css?v=20261119-donkey-hunt">'
-                                       '<script defer src="/prototype/course-tools.js?v=20261119-donkey-hunt"></script>'),
+                                       '<script defer src="/prototype/course-tools.js?v=20261119-embedded-dialog"></script>'),
                         headers={"Cache-Control": "no-cache"})
 
 
@@ -201,8 +201,8 @@ async def paper_workspace(request: Request, response: Response):
     calendar_assets = (
         '<link rel="stylesheet" href="/hustle/calendar.css?v=34204267">'
         '<link rel="stylesheet" href="calendar-connected.css?v=c478c5e2">'
-        '<link rel="stylesheet" href="/hustle/progress.css?v=20261119-loading">'
-        '<script defer src="/hustle/progress.js?v=20261119-loading"></script>'
+        '<link rel="stylesheet" href="/hustle/progress.css?v=20261119-page-progress">'
+        '<script defer src="/hustle/progress.js?v=20261119-page-progress"></script>'
         '<script defer src="/hustle/ui.js?v=20261119-progress"></script>'
         '<link rel="stylesheet" href="/prototype/topic-flashcards.css?v=be5715b0">'
         '<script defer src="/prototype/topic-flashcards.js?v=20261119-progress"></script>'
@@ -213,12 +213,12 @@ async def paper_workspace(request: Request, response: Response):
         '<script defer src="/hustle/moodle-picker.js?v=20261119-loading"></script>'
         '<script defer src="paper-workspace.js?v=20261119-donkey-hunt"></script>'
         '<script defer src="calendar-connected.js?v=69542340"></script>'
-        '<link rel="stylesheet" href="/hustle/oral-defense.css">'
+        '<link rel="stylesheet" href="/hustle/oral-defense.css?v=20261119-oral-setup">'
         '<link rel="stylesheet" href="/hustle/anki-dashboard.css?v=8dd88c40">'
-        '<script defer src="/hustle/oral-defense.js?v=20261119-progress"></script>'
+        '<script defer src="/hustle/oral-defense.js?v=20261119-oral-setup"></script>'
         '<script defer src="oral-practice.js?v=20261119-album"></script>'
         '<script defer src="/hustle/vendor/srs-engine.js?v=20261119b"></script>'
-        '<script defer src="/hustle/anki-dashboard.js?v=20261119-donkey-hunt"></script>'
+        '<script defer src="/hustle/anki-dashboard.js?v=20261119-course-overview"></script>'
         '<link rel="stylesheet" href="/prototype/rewards.css?v=20261119-donkey-hunt">'
         '<script defer src="/prototype/rewards.js?v=20261119-donkey-hunt"></script>'
     )

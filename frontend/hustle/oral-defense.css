@@ -6,6 +6,17 @@ dialog.oral-defense-modal {
   background: var(--paper, #fffdf7);
   border: 1px solid #e7dfd0;
   border-radius: 1.35rem;
+  box-shadow: 0 14px 48px #28152a36;
+}
+
+dialog.oral-defense-modal::backdrop {
+  background: #2b1d3129;
+  backdrop-filter: none;
+}
+
+dialog.oral-defense-modal:has(.od-shell--setup) {
+  width: min(34rem, calc(100% - 1.5rem));
+  padding: clamp(1rem, 3vw, 1.75rem);
 }
 
 .od-shell {
@@ -572,9 +583,24 @@ dialog.oral-defense-modal {
 .oral-practice-entry { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; padding: 1rem; margin-bottom: 1rem; border-radius: .8rem; background: #eee2f1; color: #40283f; text-decoration: none; }
 .oral-practice-entry:hover { background: #e5d5eb; }
 .od-shell :is(button:focus-visible,summary:focus-visible) { outline: 2px solid #81598c; outline-offset: 3px; }
-.od-intro { padding: 1rem; background: #f6edf5; border-radius: .85rem; }
-.od-intro p { margin-top: 0; }
-.od-intro [data-od-history] { margin-inline-start: .5rem; }
+.od-setup-header { padding-inline-end: 2.5rem; }
+.od-setup-header #dialog-title { margin: 0; font-size: clamp(1.4rem, 3.5vw, 1.75rem); }
+.od-setup-header #dialog-title:focus { outline: none; }
+.od-setup-header p { margin: .35rem 0 0; color: #675465; line-height: 1.45; overflow-wrap: anywhere; }
+.od-intro { display: grid; gap: .9rem; padding-block-start: .95rem; border-top: 1px solid #e8ded8; }
+.od-intro h3 { margin: 0 0 .5rem; font-size: .82rem; font-weight: 750; }
+.od-intro p { margin: 0; font-size: .875rem; }
+.od-intro .od-difficulty { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; padding: 0; border: 0; background: none; }
+.od-intro .od-difficulty button { display: grid; align-content: start; gap: .2rem; min-height: 3.7rem; padding: .55rem .7rem; border: 1px solid #e0d4dc; border-radius: .65rem; background: #fffcf6; color: #4b344e; font-size: .88rem; text-align: start; }
+.od-intro .od-difficulty button[aria-pressed="true"] { border-color: #a87bb5; background: #f2e9f5; box-shadow: inset 0 0 0 1px #a87bb5; color: #39203e; }
+.od-intro .od-difficulty small { color: #705a70; font-size: .75rem; font-weight: 500; line-height: 1.35; }
+.od-intro-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; }
+.od-intro-actions .primary { margin-inline-start: auto; }
+.od-intro [data-od-history]:empty { display: none; }
+.od-intro [data-od-history] button { padding-inline: 0; }
+@media (width < 28rem) {
+  .od-intro-actions .primary { width: 100%; justify-content: center; }
+}
 .od-difficulty button:disabled { cursor: default; }
 .od-shell [hidden] { display: none !important; }
 @media (max-width: 30rem) { .oral-picker-head { gap: .6rem; } .oral-picker-head img { width: 3.25rem; height: 3.25rem; } }

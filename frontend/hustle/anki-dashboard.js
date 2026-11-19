@@ -232,6 +232,24 @@
     window.HustleRewards?.setAnkiQueue(review.queue, reviewedToday);
   }
 
+  function drawCourseWidget(host, session, courseId) {
+    const review = reviewOffer(session, courseId);
+    host.innerHTML = `
+      <article class="anki-summary-card" data-anki-summary-card>
+        <header class="anki-dashboard-head">
+          <div class="anki-summary-main">
+            <span class="anki-symbol" aria-hidden="true">${icon('cards')}</span>
+            <h2>Картки Anki</h2>
+          </div>
+          <a class="anki-text-action" href="#anki">Усі колоди ${icon('arrow')}</a>
+        </header>
+        <div class="anki-dashboard-today">
+          <div class="anki-dashboard-today-copy"><p>${reviewStatus(session, review)}</p></div>
+          ${review.href ? `<a class="primary" href="${review.href}">${review.label} ${icon('arrow')}</a>` : ''}
+        </div>
+      </article>`;
+  }
+
   // ==========================================================================
   // 2. Course Overview Page (#anki)
   // ==========================================================================
@@ -810,8 +828,7 @@
         if (activeDashboardHost?.isConnected) drawDashboardWidget(activeDashboardHost, lastSession);
         if (activePageHost?.isConnected) {
           if (activePageHost.querySelector('[data-anki-study-view]')) {
-            initStudySession(lastSession, studyState.courseId, studyState.practiceAll);
-            renderStudyView(activePageHost, lastSession);
+            await mountPage(activePageHost, activeAccount);
           } else if (activePageHost.querySelector('[data-anki-overview-page]')) {
             renderCourseOverviewPage(activePageHost, lastSession);
           }
@@ -1013,15 +1030,14 @@
     }
   });
 
-  async function refreshSession(courseId = null, practiceAll = false) {
+  function fetchSession(courseId, practiceAll, isCurrent) {
     const qs = new URLSearchParams();
     qs.set('practice_all', practiceAll ? 'true' : 'false');
-    if (courseId !== null && !Number.isNaN(Number(courseId))) {
+    if (courseId !== null) {
       qs.set('course_id', String(courseId));
     }
-    const data = await apiReq(`/api/workspace/anki/session?${qs.toString()}`);
-    lastSession = data;
-    return data;
+    const finish = window.HustleProgress?.trackPageActivity('Завантажуємо картки Anki…', isCurrent);
+    return apiReq(`/api/workspace/anki/session?${qs.toString()}`).finally(() => finish?.());
   }
 
   function renderLoadState(host, isDashboard, message) {
@@ -1043,18 +1059,25 @@
     if (account) activeAccount = account;
     const host = root?.querySelector('[data-today-anki]');
     if (!host) return;
-    activeDashboardHost = host;
+    const courseId = host.hasAttribute('data-anki-course') ? Number(host.dataset.ankiCourse) : null;
+    if (courseId === null) activeDashboardHost = host;
     bindSharedHandlers(host);
 
-    if (lastSession) {
+    if (courseId === null && lastSession) {
       drawDashboardWidget(host, lastSession);
     } else {
       renderLoadState(host, true);
     }
 
     try {
-      const data = await refreshSession(null, false);
-      if (host.isConnected) drawDashboardWidget(host, data);
+      const data = await fetchSession(courseId, false, () => host.isConnected);
+      if (!host.isConnected) return;
+      if (courseId === null) {
+        lastSession = data;
+        drawDashboardWidget(host, data);
+      } else {
+        drawCourseWidget(host, data, courseId);
+      }
     } catch (err) {
       if (host.isConnected) {
         renderLoadState(host, true, err.message);
@@ -1077,8 +1100,10 @@
 
     renderLoadState(main, false);
     try {
-      const session = await refreshSession(null, practiceAll);
-      if (!main.isConnected || location.hash !== hash) return;
+      const isCurrent = () => main.isConnected && location.hash === hash;
+      const session = await fetchSession(courseId, practiceAll, isCurrent);
+      if (!isCurrent()) return;
+      lastSession = session;
       if (isStudy) {
         initStudySession(session, courseId, practiceAll);
         renderStudyView(main, session, 'h1');

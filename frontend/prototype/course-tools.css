@@ -34,3 +34,17 @@ body.workspace .workspace-topbar > :not(.update-notice) { display:none; }
 body.workspace #workspace-main[data-view="settings"] > .page-heading { display:none; }
 
 .shared-course-header .reader-breadcrumbs[hidden] { display: none; }
+
+/* The embedded workspace only covers part of the browser viewport. */
+body.workspace #study-dialog::backdrop {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+body.workspace #study-dialog:modal {
+  inset-block: var(--workspace-dialog-start, 0px) var(--workspace-dialog-end, 0px);
+  max-height: min(calc(100dvh - 2rem), calc(var(--workspace-dialog-space, 100dvh) - 1.5rem));
+  box-shadow: 0 14px 48px #28152a36;
+}
+
+body.workspace #study-dialog .study-position { padding-inline-end: 2.5rem; }

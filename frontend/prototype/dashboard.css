@@ -704,7 +704,7 @@ html:has(#workspace-main > .settings-sections) { scrollbar-gutter: stable; }
 .desk-layout > .dashboard-aside { grid-area: side; }
 .study-shortcuts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: clamp(.45rem, 1.15vw, .9rem);
 }
 .study-shortcut {
@@ -726,7 +726,7 @@ html:has(#workspace-main > .settings-sections) { scrollbar-gutter: stable; }
   cursor: pointer;
 }
 .study-shortcut--cards { --shortcut-paper:#fff6db; --shortcut-tint:#f7e5af; --shortcut-border:#dfc589; }
-.study-shortcut--quiz { --shortcut-paper:#f8eef9; --shortcut-tint:#e9d8f0; --shortcut-border:#d2b6dc; }
+.study-shortcut--materials { --shortcut-paper:#f8eef9; --shortcut-tint:#e9d8f0; --shortcut-border:#d2b6dc; }
 .study-shortcut--oral { --shortcut-paper:#fff1eb; --shortcut-tint:#f5d9cd; --shortcut-border:#e3b8a6; }
 .study-shortcut strong { font-size: clamp(.76rem, 1.15vw, 1rem); line-height: 1.22; overflow-wrap: anywhere; }
 .study-shortcut-icon {

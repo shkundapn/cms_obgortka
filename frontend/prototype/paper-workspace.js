@@ -102,9 +102,12 @@
   let importJob = null;
   function updateImportLink() {
     importLink.hidden = isPickerRoute(location.hash.slice(1)) || !importJob || (!importJob.running && !importJob.failures.size);
-    if (importJob) importLink.textContent = importJob.running
-      ? `Додаємо · ${importJob.done.size}/${importJob.chosen.length}`
-      : `Не додано: ${importJob.failures.size} ↻`;
+    if (importJob) {
+      const pct = importJob.chosen.length ? Math.round((importJob.done.size / importJob.chosen.length) * 100) : 0;
+      importLink.textContent = importJob.running
+        ? `Додаємо · ${importJob.done.size}/${importJob.chosen.length} (${pct}%)`
+        : `Не додано: ${importJob.failures.size} ↻`;
+    }
   }
   const picker = createMoodlePicker({
     courseListUrl,
@@ -164,11 +167,23 @@
     const src = '/hustle/tools.html#' + nestedRoute;
     const goal = hash === 'settings' ? '<label class="paper-goal">Ціль навчання на день <select data-paper-goal>' + [25,45,60].map(n => '<option value="' + n + '"' + (n === H.state.minutes ? ' selected' : '') + '>' + n + ' хв</option>').join('') + '</select></label>' : '';
     const header = currentCourse ? courseHeader(currentCourse, UI.route().section, true) : '<h1 class="paper-hidden-heading" tabindex="-1">' + esc(title) + '</h1>';
-    const frame = '<iframe class="paper-course-tools" title="' + esc(title) + '" data-route="' + esc(hash) + '"' +
+    const frame = '<div class="paper-frame-shell"><div class="paper-frame-loader" data-paper-frame-loader></div><iframe class="paper-course-tools" title="' + esc(title) + '" data-route="' + esc(hash) + '"' +
       (restoreStudyFocus ? ' data-focus-study-tab' : '') +
-      (currentCourse ? ' data-shared-course-header' : '') + ' src="' + esc(src) + '" allow="microphone"></iframe>';
+      (currentCourse ? ' data-shared-course-header' : '') + ' src="' + esc(src) + '" allow="microphone"></iframe></div>';
     if (hash === 'settings') window.HustleDashboard.renderSettings('general', goal + frame);
     else main.innerHTML = header + frame;
+    const loaderSlot = main.querySelector('[data-paper-frame-loader]');
+    const frameEl = main.querySelector('iframe.paper-course-tools');
+    if (loaderSlot && frameEl && window.HustleProgress) {
+      const frameTracker = window.HustleProgress.mount(loaderSlot, {
+        title: `Відкриваємо «${title}»…`,
+        expectedSec: 3,
+        compact: true,
+      });
+      const finishFrame = () => { frameTracker.stop({remove: true}); loaderSlot.remove(); };
+      frameEl.addEventListener('load', finishFrame, {once: true});
+      frameEl.addEventListener('error', () => frameTracker.fail('Не вдалося завантажити розділ. Спробуй оновити сторінку.'), {once: true});
+    }
     return true;
   }
   const courseSections = {overview: 'Огляд', topics: 'Теми', practice: 'Практика', assignments: 'Дедлайни', manage: 'Параметри'};

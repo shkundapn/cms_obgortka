@@ -197,20 +197,38 @@
     const study=event.target.closest('[data-study]'); if(study)showPractice(study.dataset.study,study.dataset.mix);
     const build=event.target.closest('[data-build-exam]'); if(!build)return;
     const bundle=activeBundle, version=location.hash, indicator=main.querySelector('[data-exam-status]');
-    build.disabled=true; indicator.textContent='Готуємо матеріали…';
+    build.disabled=true;
+    const examTracker = window.HustleProgress?.mount(indicator, {
+      title: 'Готуємо матеріали до іспиту…',
+      stages: [
+        'Збираємо конспекти та ключові теми курсу',
+        'Враховуємо помилки з практики',
+        'Формуємо головний конспект, карту понять і пробний тест',
+      ],
+      expectedSec: 25,
+    });
+    if (!examTracker) indicator.textContent='Готуємо матеріали…';
     try {
       const response=await UI.post(`/api/workspace/courses/${encodeURIComponent(bundle.course.course_id)}/exam-mix`,{});
       bundle.exam_mix=response.exam_mix; bundle.course.exam_mix_stale=false;
+      examTracker?.complete('Матеріали до іспиту готові');
       if(location.hash===version) window.dispatchEvent(new Event('hustle:refresh'));
-    } catch(err) { indicator.textContent=err.message; }
+    } catch(err) { examTracker?.fail(err.message); if(!examTracker) indicator.textContent=err.message; }
     finally { build.disabled=false; }
   });
   body.addEventListener('click',async event=>{
     const transcript=event.target.closest('[data-transcript]');
     if(transcript) {
       const material=materialRecords[Number(transcript.dataset.transcript)], target=body.querySelector('[data-transcript-content]');
-      transcript.disabled=true;target.textContent='Отримуємо транскрипт…';
-      try {const response=await UI.post('/api/courses/transcribe-video',{url:material.url,course_id:material.course.course_id,module_id:material.id});if(!response.success)throw new Error(response.message||'Транскрипт недоступний.');target.innerHTML=`<div class="material-description">${esc(response.full_text)}</div>`;}catch(err){target.textContent=err.message;}finally{transcript.disabled=false;}
+      transcript.disabled=true;
+      const trTracker = window.HustleProgress?.mount(target, {
+        title: 'Отримуємо транскрипт відео…',
+        stages: ['Підключаємося до джерела відео', 'Витягуємо та розшифровуємо текст лекції'],
+        expectedSec: 18,
+        compact: true,
+      });
+      if (!trTracker) target.textContent='Отримуємо транскрипт…';
+      try {const response=await UI.post('/api/courses/transcribe-video',{url:material.url,course_id:material.course.course_id,module_id:material.id});if(!response.success)throw new Error(response.message||'Транскрипт недоступний.');trTracker?.stop();target.innerHTML=`<div class="material-description">${esc(response.full_text)}</div>`;}catch(err){trTracker?.fail(err.message);if(!trTracker)target.textContent=err.message;}finally{transcript.disabled=false;}
     }
     if(!practice)return;
     const p=practice;
@@ -255,13 +273,31 @@
     const prep=event.target.closest('[data-reader-prepare]');
     if(!prep||!activeBundle)return;
     const topicIdx=prep.dataset.readerPrepare, box=prep.closest('.reader-book-placeholder'), errEl=box?.querySelector('[data-reader-prepare-error]');
-    prep.disabled=true; const prevText=prep.textContent; prep.textContent='Готуємо конспект…';
+    prep.disabled=true; const prevText=prep.textContent; prep.textContent='Генеруємо…';
     if(errEl){errEl.hidden=true;errEl.textContent='';}
+    let progressSlot = box?.querySelector('[data-reader-prepare-progress]');
+    if (box && !progressSlot) {
+      progressSlot = document.createElement('div');
+      progressSlot.setAttribute('data-reader-prepare-progress', '');
+      box.append(progressSlot);
+    }
+    const prepTracker = progressSlot && window.HustleProgress?.mount(progressSlot, {
+      title: 'Компілюємо конспект, картки й самоперевірку…',
+      stages: [
+        'Зчитуємо файли та матеріали теми',
+        'Виділяємо ключові концепції та структуру розділів',
+        'Генеруємо конспект, формули, картки й селф-тести',
+        'Перевіряємо та зберігаємо результат',
+      ],
+      expectedSec: 32,
+    });
     try{
       await UI.post(`/api/workspace/courses/${activeBundle.course.course_id}/topics/${encodeURIComponent(topicIdx)}/prepare-learning`,{});
+      prepTracker?.complete('Конспект і практика готові');
       UI.toast('Конспект готовий');
       window.dispatchEvent(new Event('hustle:refresh'));
     }catch(err){
+      prepTracker?.stop({remove:true});
       if(errEl){errEl.textContent=err.message+' (Можна змінити API-ключ у Налаштуваннях.)';errEl.hidden=false;}
       else UI.toast(err.message);
       prep.disabled=false; prep.textContent=prevText;

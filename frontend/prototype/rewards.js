@@ -263,11 +263,49 @@
       reward: newTopics.size ? { points: rates.cards.points * newTopics.size, xp: rates.cards.xp * newTopics.size } : null, done });
   }
 
+  function quizQuest({ course, topics = [], error = false }, data) {
+    const quiz = topics.find((topic) => topic.question_count > 0 && !data.practice[key('quiz', course, topic.topic_index)]);
+    const previousQuiz = topics.some((topic) => topic.question_count > 0 && data.practice[key('quiz', course, topic.topic_index)]);
+    return questRow({ id: 'quiz', title: 'Пройди квіз', symbol: 'practice',
+      href: course ? UI.courseLink(course, 'quizzes', quiz?.topic_index) : '',
+      detail: quiz ? `${UI.courseName(quiz.title)} · від ⅔ правильних відповідей` : error ? 'Не вдалося завантажити квізи' : previousQuiz ? 'Самоперевірку завершено' : course ? 'Квізи за темами' : 'Спочатку додай предмет',
+      reward: quiz ? rates.quiz : null, done: !quiz && previousQuiz });
+  }
+
+  function readingQuest(bundle, course) {
+    const nodes = bundle.course_map?.nodes || [];
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const excluded = ['info', 'resources', 'archive', 'assessment'];
+    const readable = nodes.filter(node => {
+      if (!node.learnable || !(node.book_sections?.length || node.materials?.some(material =>
+        ['lesson', 'book', 'page', 'resource'].includes(material.modname) &&
+        ![false, 0, '0'].includes(material.uservisible) && ![false, 0, '0'].includes(material.visible)))) return false;
+      for (let parent = byId.get(node.parent_id); parent; parent = byId.get(parent.parent_id)) {
+        if (excluded.includes(parent.kind)) return false;
+      }
+      return true;
+    });
+    let recent;
+    try { recent = JSON.parse(sessionStorage.getItem('hustle:course-reading:' + H.account.owner))?.[course]; } catch {}
+    const node = readable.find(item => item.id === recent?.nodeId) ||
+      readable.find(item => recent?.topicIndex != null && String(item.topic_index) === String(recent.topicIndex)) ||
+      readable.find(item => item.book_sections?.length) || readable[0];
+    if (!node) return null;
+    const path = UI.courseLink(course, 'reading', node.topic_index ?? undefined);
+    return { id: 'reading', symbol: 'bookmark', title: node.book_sections?.length ? 'Читати конспект' : 'Читати матеріали',
+      detail: UI.courseName(node.title), href: path + (path.includes('?') ? '&' : '?') + 'node=' + encodeURIComponent(node.id) };
+  }
+
+  function studyActions(model, data) {
+    if (!model.course) return '';
+    const reading = model.reading || { id: 'reading', symbol: 'bookmark', title: 'Відкрити теми',
+      detail: H.workspace.courses.find(course => course.id === model.course)?.name || '', href: UI.courseLink(model.course, 'topics') };
+    return `<ul class="reward-quests" aria-label="До навчання">${questRow(reading)}${quizQuest(model, data)}</ul>`;
+  }
+
   function routeMarkup({ course, topics = [], tasks = [], error = false }, data) {
     const pending = nextDeadline(tasks, data);
     const closed = !pending && tasks.some((task) => task.done && deadlineKey(task)?.id === data.recentDeadline);
-    const quiz = topics.find((topic) => topic.question_count > 0 && !data.practice[key('quiz', course, topic.topic_index)]);
-    const previousQuiz = topics.some((topic) => topic.question_count > 0 && data.practice[key('quiz', course, topic.topic_index)]);
     const current = topics.find((topic) => topicSteps(topic, course, data).some((step) => !step.done));
     const next = current && topics[topics.indexOf(current) + 1];
     const nextStep = next && topicSteps(next, course, data)[0];
@@ -281,10 +319,7 @@
       ${questRow({ id: 'deadline', title: 'Закрий дедлайн', symbol: 'calendar', href: '#deadlines',
         detail: pending ? 'Познач найближче завдання виконаним' : closed ? 'Дедлайн виконано' : 'Відкритих дедлайнів немає',
         reward: pending ? rates.deadline : null, done: closed })}
-      ${questRow({ id: 'quiz', title: 'Пройди квіз', symbol: 'practice',
-        href: course ? UI.courseLink(course, 'quizzes', quiz?.topic_index) : '',
-        detail: quiz ? `${UI.courseName(quiz.title)} · від ⅔ правильних відповідей` : error ? 'Не вдалося завантажити квізи' : previousQuiz ? 'Самоперевірку завершено' : course ? 'Квізи за темами' : 'Спочатку додай предмет',
-        reward: quiz ? rates.quiz : null, done: !quiz && previousQuiz })}
+      ${quizQuest({ course, topics, error }, data)}
       ${ankiQuest(data)}${alternate}</ul>
       ${nextStep ? `<a class="reward-next-topic" href="${UI.courseLink(course, nextStep.route, next.topic_index)}">Наступна тема <strong>${esc(UI.courseName(next.title))}</strong>${icon('arrow')}</a>` : ''}`;
   }
@@ -292,8 +327,18 @@
   async function loadRoute(host) {
     const model = routes.get(host);
     const { course } = model;
+    const url = `/api/workspace/courses/${encodeURIComponent(course)}`;
+    if (model.overview) {
+      const [bundle, quizzes] = await Promise.allSettled([UI.api(url), UI.api(url + '/quizzes')]);
+      if (!host.isConnected) return;
+      if (bundle.status === 'fulfilled') model.reading = readingQuest(bundle.value, course);
+      model.topics = quizzes.status === 'fulfilled' ? quizzes.value.topics || [] : [];
+      model.error = quizzes.status === 'rejected';
+      drawQuests(host, read());
+      return;
+    }
     try {
-      const results = await Promise.allSettled(['flashcards', 'quizzes'].map((part) => UI.api(`/api/workspace/courses/${encodeURIComponent(course)}/${part}`)));
+      const results = await Promise.allSettled(['flashcards', 'quizzes'].map((part) => UI.api(`${url}/${part}`)));
       if (!host.isConnected) return;
       if (results.every((result) => result.status === 'rejected')) throw new Error('Course practice is unavailable');
       const index = new Map();
@@ -342,7 +387,7 @@
     const host = panel.querySelector('[data-reward-quests]');
     if (!model || !host) return;
     const focused = host.contains(document.activeElement) && document.activeElement.closest('[data-reward-quest]')?.dataset.rewardQuest;
-    host.innerHTML = routeMarkup(model, data);
+    host.innerHTML = model.overview ? studyActions(model, data) : routeMarkup(model, data);
     if (focused) host.querySelector(`[data-reward-quest="${focused}"] a`)?.focus({ preventScroll: true });
   }
 
@@ -401,12 +446,12 @@
       ankiQueue = queue;
       ankiReviewedToday = reviewedToday;
       const data = read();
-      document.querySelectorAll('[data-rewards-panel]').forEach((panel) => drawQuests(panel, data));
+      document.querySelectorAll('[data-rewards-panel]:not([data-reward-overview])').forEach((panel) => drawQuests(panel, data));
     },
     panel(course, activity = '') {
-      return `<section class="reward-panel reward-journey" data-rewards-panel data-reward-course="${esc(course || '')}" aria-labelledby="reward-journey-title">
+      return `<section class="reward-panel reward-journey" data-rewards-panel${activity ? ' data-reward-overview' : ''} data-reward-course="${esc(course || '')}" aria-labelledby="reward-journey-title">
         <div class="reward-journey-progress"><h2 id="reward-journey-title">Навчальний маршрут</h2><div data-reward-progress></div></div>
-        ${activity || '<div class="reward-journey-actions" data-reward-quests></div>'}
+        ${activity ? `<div class="reward-journey-content">${activity}<div class="reward-journey-study" data-reward-quests></div></div>` : '<div class="reward-journey-actions" data-reward-quests></div>'}
       </section>`;
     },
     preferred(courses, fallback) { const id = read().recent?.course; return courses.some((course) => course.id === id) ? id : fallback; },
@@ -414,7 +459,7 @@
       const panel = root.querySelector('[data-rewards-panel]');
       if (panel && !routes.has(panel)) {
         const course = panel.dataset.rewardCourse;
-        routes.set(panel, { course, tasks });
+        routes.set(panel, { course, tasks, overview: panel.hasAttribute('data-reward-overview') });
         if (course && panel.querySelector('[data-reward-quests]')) loadRoute(panel);
         trackDeadlines(tasks);
       }

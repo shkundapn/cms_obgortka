@@ -95,7 +95,7 @@ window.createMoodlePicker = function ({courseListUrl, onProgress, onImported, on
   function renderRowStatus(id) {
     const text = batch.statuses.get(id) || 'Очікує';
     const isActive = batch.running && batch.activeId === id;
-    return `${isActive ? '<progress class="loading-spinner" aria-hidden="true"></progress>' : ''}${esc(text)}`;
+    return `${isActive && !window.HustleProgress?.trackPageActivity ? '<progress class="loading-spinner" aria-hidden="true"></progress>' : ''}${esc(text)}`;
   }
 
   function drawBatch() {

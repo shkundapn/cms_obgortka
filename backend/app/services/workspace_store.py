@@ -29,6 +29,7 @@ from app.models.mix import (
     TopicMaterialItem,
     TopicMix,
     TopicPreviewItem,
+    VideoConceptAnchor,
     WorkspaceCourseSummary,
     compute_artifact_cache_key,
     compute_content_hash,
@@ -238,6 +239,48 @@ class WorkspaceStore:
             );
             CREATE INDEX IF NOT EXISTS idx_file_manifest_course
                 ON file_manifest (owner_id, course_id);
+
+            CREATE TABLE IF NOT EXISTS module_progress (
+                owner_id TEXT NOT NULL,
+                course_id INTEGER NOT NULL,
+                topic_index INTEGER NOT NULL,
+                module_id TEXT NOT NULL,
+                watched_concepts_json TEXT NOT NULL DEFAULT '[]',
+                video_bonus_points INTEGER NOT NULL DEFAULT 0,
+                quizzes_passed INTEGER NOT NULL DEFAULT 0,
+                quizzes_correct INTEGER NOT NULL DEFAULT 0,
+                quizzes_total INTEGER NOT NULL DEFAULT 0,
+                tutor_score INTEGER,
+                tutor_passed INTEGER NOT NULL DEFAULT 0,
+                tutor_answer TEXT,
+                tutor_feedback TEXT,
+                tutor_expected_10 TEXT,
+                completed INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (owner_id, course_id, topic_index, module_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_module_progress_course
+                ON module_progress (owner_id, course_id, topic_index);
+
+            CREATE TABLE IF NOT EXISTS topic_mistakes (
+                mistake_id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                course_id INTEGER NOT NULL,
+                topic_index INTEGER NOT NULL,
+                topic_title TEXT NOT NULL,
+                module_id TEXT NOT NULL,
+                module_title TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                question_text TEXT NOT NULL,
+                user_answer TEXT NOT NULL,
+                expected_answer TEXT NOT NULL,
+                explanation TEXT NOT NULL,
+                score INTEGER,
+                resolved INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_topic_mistakes_lookup
+                ON topic_mistakes (owner_id, course_id, topic_index, resolved);
             """
         )
 
@@ -566,10 +609,24 @@ class WorkspaceStore:
             body = ch["content_text"]
 
             old_sec = existing_map.get(chunk_id)
+            short_description: Optional[str] = None
+            video_concepts_raw: List[Dict[str, Any]] = list(ch.get("video_concepts") or [])
+            module_quizzes_raw: List[Dict[str, Any]] = []
+            tutor_question: Optional[str] = None
+            tutor_expected_answer: Optional[str] = None
+            module_id: Optional[str] = None
+
             if old_sec and old_sec.source_hash == chunk_hash:
                 base_heading = old_sec.heading
                 explanation_md = old_sec.explanation_markdown
                 key_takeaways = list(old_sec.key_takeaways)
+                short_description = getattr(old_sec, "short_description", None)
+                if getattr(old_sec, "video_concepts", None):
+                    video_concepts_raw = [vc.model_dump() if hasattr(vc, "model_dump") else vc for vc in old_sec.video_concepts]
+                module_quizzes_raw = [q.model_dump() if hasattr(q, "model_dump") else q for q in (getattr(old_sec, "module_quizzes", None) or [])]
+                tutor_question = getattr(old_sec, "tutor_question", None)
+                tutor_expected_answer = getattr(old_sec, "tutor_expected_answer", None)
+                module_id = getattr(old_sec, "module_id", None)
             else:
                 cached_core = self._get_cached_artifact(scoped_hash, "book_section_core", pv)
                 if cached_core:
@@ -577,6 +634,13 @@ class WorkspaceStore:
                     base_heading = core["heading"]
                     explanation_md = core["explanation_markdown"]
                     key_takeaways = list(core["key_takeaways"])
+                    short_description = core.get("short_description")
+                    if core.get("video_concepts"):
+                        video_concepts_raw = list(core["video_concepts"])
+                    module_quizzes_raw = list(core.get("module_quizzes") or [])
+                    tutor_question = core.get("tutor_question")
+                    tutor_expected_answer = core.get("tutor_expected_answer")
+                    module_id = core.get("module_id")
                     cache_hits += 1
                 else:
                     built = await generator.generate_book_section(
@@ -590,10 +654,18 @@ class WorkspaceStore:
                         source_hash=chunk_hash,
                         course_title=course_title,
                         topic_title=topic_title,
+                        video_concepts=video_concepts_raw or None,
                     )
                     base_heading = built.heading
                     explanation_md = built.explanation_markdown
                     key_takeaways = list(built.key_takeaways)
+                    short_description = getattr(built, "short_description", None)
+                    if getattr(built, "video_concepts", None):
+                        video_concepts_raw = [vc.model_dump() if hasattr(vc, "model_dump") else vc for vc in built.video_concepts]
+                    module_quizzes_raw = [q.model_dump() if hasattr(q, "model_dump") else q for q in (getattr(built, "module_quizzes", None) or [])]
+                    tutor_question = getattr(built, "tutor_question", None)
+                    tutor_expected_answer = getattr(built, "tutor_expected_answer", None)
+                    module_id = getattr(built, "module_id", None)
                     recomputed += 1
                     self._put_cached_artifact(
                         scoped_hash,
@@ -601,9 +673,15 @@ class WorkspaceStore:
                         pv,
                         json.dumps(
                             {
+                                "module_id": module_id,
                                 "heading": base_heading,
+                                "short_description": short_description,
                                 "explanation_markdown": explanation_md,
                                 "key_takeaways": key_takeaways,
+                                "video_concepts": video_concepts_raw,
+                                "module_quizzes": module_quizzes_raw,
+                                "tutor_question": tutor_question,
+                                "tutor_expected_answer": tutor_expected_answer,
                             }
                         ),
                         safety_status=safety,
@@ -665,13 +743,27 @@ class WorkspaceStore:
                             safety_status=safety,
                         )
 
+            vc_objs = [
+                VideoConceptAnchor.model_validate(vc) if isinstance(vc, dict) else vc
+                for vc in video_concepts_raw
+            ]
+            mq_objs = [
+                PracticeQuestion.model_validate(q) if isinstance(q, dict) else q
+                for q in module_quizzes_raw
+            ]
             sections.append(
                 InteractiveBookSection(
+                    module_id=module_id or chunk_id or f"mod-{chunk_hash[:10]}",
                     chunk_id=chunk_id,
                     source_hash=chunk_hash,
                     heading=base_heading,
+                    short_description=short_description,
                     explanation_markdown=explanation_md,
                     key_takeaways=key_takeaways,
+                    video_concepts=vc_objs,
+                    module_quizzes=mq_objs,
+                    tutor_question=tutor_question,
+                    tutor_expected_answer=tutor_expected_answer,
                     mermaid_diagram=mermaid_diagram,
                     visual_card_caption=card_caption,
                     visual_card_prompt=card_prompt,
@@ -750,7 +842,7 @@ class WorkspaceStore:
         course_title: str = "",
         raise_on_error: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """Resolve a YouTube video's captions (0 tokens) or cached Gemini video notes."""
+        """Resolve a YouTube video's full captions + chronological concepts (or structured Gemini video notes)."""
         import asyncio
         from app.services.video_transcriber import VideoTranscriberService
         from app.services.gemini_service import GeminiService
@@ -760,44 +852,76 @@ class WorkspaceStore:
         if not norm or not vid:
             return None
 
+        gemini = GeminiService()
         cache_hash = compute_content_hash(f"yt:{vid}")
-        cached = self._get_cached_artifact(cache_hash, "youtube_digest", "yt-v1")
+        cached = self._get_cached_artifact(cache_hash, "youtube_digest", "yt-v2")
         if cached:
             try:
                 obj = json.loads(cached)
-                if obj.get("text"):
+                if obj.get("text") and (obj.get("token_cost", 0) > 0 or not gemini.is_available):
                     return obj
             except Exception:
                 pass
-
         yt = await asyncio.to_thread(VideoTranscriberService.get_youtube_transcript, norm)
         if yt and yt.get("full_text"):
+            segments = yt.get("segments") or []
+            timestamped = VideoTranscriberService.format_timestamped_transcript(segments, max_chars=42000)
+            concepts = []
+            video_summary = ""
+            if gemini.is_available and (timestamped or yt["full_text"]):
+                structured = await gemini.structure_youtube_concepts(
+                    norm,
+                    vid,
+                    timestamped or yt["full_text"][:42000],
+                    title=title,
+                    course_title=course_title,
+                    raise_on_error=False,
+                )
+                if structured:
+                    concepts = structured.get("concepts") or []
+                    video_summary = structured.get("video_summary") or ""
+            if not concepts and segments:
+                concepts = VideoTranscriberService.group_segments_into_concepts(segments, vid, target_chunks=4)
             result = {
                 "url": norm,
                 "video_id": vid,
                 "source": "youtube_captions",
                 "language": yt.get("language"),
-                "text": yt["full_text"][:18000],
-                "token_cost": 0,
+                "text": (timestamped or yt["full_text"])[:42000],
+                "full_text": yt["full_text"][:42000],
+                "video_summary": video_summary,
+                "concepts": concepts,
+                "segments": segments[:400],
+                "token_cost": 1 if (concepts and gemini.is_available) else 0,
             }
-            self._put_cached_artifact(cache_hash, "youtube_digest", "yt-v1", json.dumps(result), safety_status="safe_material")
+            self._put_cached_artifact(cache_hash, "youtube_digest", "yt-v2", json.dumps(result, ensure_ascii=False), safety_status="safe_material")
             return result
 
-        gemini = GeminiService()
         if gemini.is_available:
-            notes = await gemini.summarize_youtube_video(
-                norm, title=title, course_title=course_title, raise_on_error=raise_on_error
+            structured = await gemini.summarize_youtube_video_structured(
+                norm, vid, title=title, course_title=course_title, raise_on_error=raise_on_error
             )
-            if notes and notes.strip():
+            if structured and (structured.get("full_notes") or structured.get("concepts")):
+                concepts = structured.get("concepts") or []
+                full_notes = (structured.get("full_notes") or "").strip()
+                if not full_notes and concepts:
+                    full_notes = "\n\n".join(
+                        f"### [{c['timecode']}] {c['concept_title']}\n{c.get('explanation_markdown') or c.get('summary')}"
+                        for c in concepts
+                    )
                 result = {
                     "url": norm,
                     "video_id": vid,
                     "source": "gemini_video",
                     "language": "uk",
-                    "text": notes.strip()[:18000],
+                    "text": full_notes[:42000],
+                    "full_text": full_notes[:42000],
+                    "video_summary": structured.get("video_summary") or full_notes[:300],
+                    "concepts": concepts,
+                    "segments": [],
                     "token_cost": 1,
                 }
-                self._put_cached_artifact(cache_hash, "youtube_digest", "yt-v1", json.dumps(result), safety_status="safe_material")
+                self._put_cached_artifact(cache_hash, "youtube_digest", "yt-v2", json.dumps(result, ensure_ascii=False), safety_status="safe_material")
                 return result
         return None
 
@@ -809,21 +933,49 @@ class WorkspaceStore:
         topic_title: str = "",
         max_videos: int = 3,
     ) -> Tuple[List[Dict[str, Any]], str]:
-        """Populate YouTube transcripts/digests into video chunks and topic snapshot text."""
+        """Populate full YouTube transcripts & concept submodules into video chunks and topic snapshot text."""
         from app.services.video_transcriber import VideoTranscriberService
 
         enriched: List[Dict[str, Any]] = []
         resolved_by_url: Dict[str, Optional[Dict[str, Any]]] = {}
         seen_urls = 0
 
+        def expand_concepts(parent_ch: Dict[str, Any], concepts: List[Dict[str, Any]], digest: Dict[str, Any]) -> List[Dict[str, Any]]:
+            sub_chunks: List[Dict[str, Any]] = []
+            parent_cid = str(parent_ch.get("chunk_id") or "chunk-yt")
+            parent_mod_id = parent_ch.get("module_id") or 0
+            parent_modname = parent_ch.get("modname") or "url"
+            for idx, vc in enumerate(concepts):
+                c_title = vc.get("concept_title") or f"Концепт {idx + 1}"
+                c_body = (vc.get("explanation_markdown") or vc.get("summary") or "").strip()
+                if not c_body:
+                    continue
+                vc_url = vc.get("youtube_url") or digest.get("url") or ""
+                tc = vc.get("timecode") or "00:00"
+                full_body = (
+                    f"{c_body}\n\n"
+                    f"Відеопосилання на концепт ({tc}): {vc_url}"
+                ).strip()
+                sub_chunks.append({
+                    "chunk_id": f"{parent_cid}::vc-{idx}",
+                    "module_id": parent_mod_id,
+                    "modname": parent_modname,
+                    "heading": c_title,
+                    "content_text": full_body,
+                    "module_hash": compute_content_hash(f"{parent_cid}|vc-{idx}|{c_title}|{full_body}"),
+                    "safety_status": parent_ch.get("safety_status", "safe_material"),
+                    "video_concepts": [vc],
+                })
+            return sub_chunks
+
         for ch in chunks:
             copy_ch = dict(ch)
             body = copy_ch.get("content_text") or ""
-            if (
-                copy_ch.get("safety_status", "safe_material") != "restricted_exam"
-                and "[YouTube Transcript]" not in body
-                and "[YouTube Video Notes]" not in body
-            ):
+            chunk_concepts: List[Dict[str, Any]] = []
+            expanded_for_chunk: List[Dict[str, Any]] = []
+
+            has_yt_text = "[YouTube Transcript]" in body or "[YouTube Video Notes]" in body
+            if copy_ch.get("safety_status", "safe_material") != "restricted_exam":
                 urls = VideoTranscriberService.extract_youtube_urls_from_text(body)
                 additions = []
                 for yt_url in urls:
@@ -838,11 +990,31 @@ class WorkspaceStore:
                         )
                     digest = resolved_by_url.get(yt_url)
                     if digest and digest.get("text"):
-                        tag = "[YouTube Transcript]" if digest["source"] == "youtube_captions" else "[YouTube Video Notes]"
-                        additions.append(f"{tag} ({yt_url})\n{digest['text']}")
+                        if not has_yt_text:
+                            tag = "[YouTube Transcript]" if digest["source"] == "youtube_captions" else "[YouTube Video Notes]"
+                            additions.append(f"{tag} ({yt_url})\n{digest['text']}")
+                        concepts = digest.get("concepts") or []
+                        if concepts:
+                            chunk_concepts.extend(concepts)
+                            if len(concepts) >= 2 and "::vc-" not in str(copy_ch.get("chunk_id") or ""):
+                                expanded_for_chunk.extend(expand_concepts(copy_ch, concepts, digest))
                 if additions:
                     copy_ch["content_text"] = (body + "\n\n" + "\n\n".join(additions)).strip()
-            enriched.append(copy_ch)
+                    copy_ch["module_hash"] = compute_content_hash(
+                        f"{copy_ch.get('heading','')}\n{copy_ch['content_text']}"
+                    )
+            if chunk_concepts:
+                copy_ch["video_concepts"] = chunk_concepts
+
+            raw_prefix = body.split("[YouTube ", 1)[0]
+            non_url_body = re.sub(r"https?://\S+|YouTube URL:\s*", "", raw_prefix).strip()
+            if expanded_for_chunk and len(non_url_body) < 250:
+                # Replace thin link-only chunk with dedicated concept modules
+                enriched.extend(expanded_for_chunk)
+            else:
+                enriched.append(copy_ch)
+                if expanded_for_chunk:
+                    enriched.extend(expanded_for_chunk)
 
         extra_snap_blocks = []
         for yt_url in VideoTranscriberService.extract_youtube_urls_from_text(snapshot_text):
@@ -854,6 +1026,11 @@ class WorkspaceStore:
             if digest and digest.get("text"):
                 tag = "[YouTube Transcript]" if digest["source"] == "youtube_captions" else "[YouTube Video Notes]"
                 extra_snap_blocks.append(f"{tag} ({yt_url})\n{digest['text']}")
+                concepts = digest.get("concepts") or []
+                if len(concepts) >= 2 and enriched:
+                    enriched.extend(expand_concepts({"chunk_id": "snap-yt", "modname": "url"}, concepts, digest))
+                elif concepts and enriched:
+                    enriched[0].setdefault("video_concepts", []).extend(concepts)
 
         merged_text = "\n\n".join(c.get("content_text") or "" for c in enriched if c.get("content_text"))
         if extra_snap_blocks:
@@ -927,6 +1104,17 @@ class WorkspaceStore:
             total_hits += h
             total_recomputed += r
 
+        summary_parts: List[str] = []
+        seen_summary: set = set()
+        for sec in book_sections:
+            sd = (getattr(sec, "short_description", None) or "").strip()
+            if sd and sd not in seen_summary:
+                seen_summary.add(sd)
+                summary_parts.append(sd)
+        if not summary_parts:
+            summary_parts = [tk for sec in book_sections for tk in (sec.key_takeaways or [])][:3]
+        topic_summary = " ".join(summary_parts[:3]).strip() or None
+
         mix_id = stable_mix_id or f"mix-{snapshot.course_id}-{topic_index}-{src_hash[:8]}"
         now = datetime.now(timezone.utc)
         mix = TopicMix(
@@ -935,6 +1123,7 @@ class WorkspaceStore:
             authority=snapshot.authority,
             topic_index=topic_index,
             title=snapshot.title,
+            topic_summary=topic_summary,
             source_hash=src_hash,
             version=version,
             visibility=snapshot.visibility,

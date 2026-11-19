@@ -86,17 +86,113 @@
   transform: none;
 }
 
+.oral-picker-head:has(> .mascot-sticker--oral) {
+  --oral-sticker-size: clamp(3.85rem, 8.2vw, 6.1rem);
+  position: relative;
+  min-block-size: calc(var(--oral-sticker-size) * 1.35);
+  padding-inline-end: calc(var(--oral-sticker-size) + .6rem);
+}
+
 .mascot-sticker--oral {
-  --sticker-size: clamp(3.8rem, 9vw, 6.8rem);
-  --sticker-angle: 16deg;
-  --sticker-shift: .25rem -.75rem;
-  --sticker-tape-left: -8%;
-  --sticker-tape-top: 74%;
-  --sticker-tape-angle: -30deg;
-  margin: -.7rem -.9rem 0 0;
+  --sticker-size: var(--oral-sticker-size);
+  --sticker-angle: 12deg;
+  --sticker-tape-left: -10%;
+  --sticker-tape-top: 79%;
+  --sticker-tape-width: 54%;
+  --sticker-tape-angle: -33deg;
+  --sticker-tape-color: #dcc19a;
+  position: absolute;
+  inset-block-start: -2.2rem;
+  inset-inline-end: -.25rem;
 }
 
 .oral-picker .mascot-sticker > img { inline-size: 100%; block-size: auto; transform: none; }
+
+.topic-set-empty:has(> .mascot-sticker--quiz-start) {
+  --quiz-start-sticker-size: clamp(5.55rem, 13vw, 9.5rem);
+  position: relative;
+  min-block-size: clamp(7rem, 13vw, 9.6rem);
+  margin-inline-end: 1rem;
+  padding-inline-end: calc(var(--quiz-start-sticker-size) + .3rem);
+}
+
+.mascot-sticker--quiz-start {
+  --sticker-size: var(--quiz-start-sticker-size);
+  --sticker-angle: -11deg;
+  --sticker-tape-left: 56%;
+  --sticker-tape-top: 77%;
+  --sticker-tape-width: 44%;
+  --sticker-tape-angle: 29deg;
+  --sticker-tape-color: #d5bbdc;
+  position: absolute;
+  inset-block-end: -.85rem;
+  inset-inline-end: -.5rem;
+}
+
+.answer-block:has(> .mascot-sticker--quiz-correction) {
+  --quiz-correction-sticker-size: clamp(4.15rem, 12vw, 6.25rem);
+  position: relative;
+  min-block-size: calc(var(--quiz-correction-sticker-size) - .9rem);
+  padding-inline-end: calc(var(--quiz-correction-sticker-size) + .8rem);
+}
+
+.mascot-sticker--quiz-correction {
+  --sticker-size: var(--quiz-correction-sticker-size);
+  --sticker-angle: 13deg;
+  --sticker-tape-left: 58%;
+  --sticker-tape-top: 79%;
+  --sticker-tape-angle: -31deg;
+  position: absolute;
+  inset-block-start: -.7rem;
+  inset-inline-end: -.65rem;
+}
+
+.topic-review-card:has(> .mascot-sticker--review-due) {
+  --review-sticker-size: clamp(5.35rem, 13vw, 8.4rem);
+  position: relative;
+  margin-block-start: 1.55rem;
+}
+
+.topic-review-card:has(> .mascot-sticker--review-due) .topic-review-position {
+  min-block-size: 2.85rem;
+  min-inline-size: 0;
+  padding-inline-end: calc(var(--review-sticker-size) + .5rem);
+}
+
+.topic-review-card:has(> .mascot-sticker--review-due) progress { min-inline-size: 0; }
+
+.mascot-sticker--review-due {
+  --sticker-size: var(--review-sticker-size);
+  --sticker-angle: 8deg;
+  --sticker-tape-left: 67%;
+  --sticker-tape-top: 72%;
+  --sticker-tape-width: 34%;
+  --sticker-tape-angle: -23deg;
+  --sticker-tape-color: #dcc19a;
+  position: absolute;
+  inset-block-start: -1.1rem;
+  inset-inline-end: clamp(.35rem, 2vw, 2.05rem);
+}
+
+.topic-card-answer:has(> .mascot-sticker--flashcard-flip) {
+  --flip-sticker-size: clamp(3.85rem, 8vw, 6rem);
+  position: relative;
+  min-block-size: calc(var(--flip-sticker-size) * 1.25);
+  padding-inline-start: calc(var(--flip-sticker-size) - .5rem);
+}
+
+.mascot-sticker--flashcard-flip {
+  --sticker-size: var(--flip-sticker-size);
+  --sticker-angle: -13deg;
+  --sticker-tape-left: 61%;
+  --sticker-tape-top: 78%;
+  --sticker-tape-width: 52%;
+  --sticker-tape-angle: 28deg;
+  --sticker-tape-color: #c8aecf;
+  position: absolute;
+  inset-block-start: -1rem;
+  inset-inline-start: calc(0rem - clamp(1rem, 2.8vw, 2rem) - .75rem);
+}
 
 .mascot-empty { text-align: center; }
 .mascot-empty:has(.mascot-sticker:not([hidden])) {
@@ -163,8 +259,17 @@
   .deadline-preview-heading:has(.mascot-sticker) .panel-title { flex-wrap: wrap; gap: .2rem .65rem; }
 }
 
+@media (max-width: 43rem) {
+  .mascot-sticker--flashcard-flip {
+    --sticker-angle: -10deg;
+    --sticker-tape-left: 33%;
+    --sticker-tape-width: 48%;
+    inset-inline-start: calc(.45rem - clamp(1rem, 2.8vw, 2rem));
+  }
+}
+
 @media (max-width: 36rem) {
   .mascot-sticker { --sticker-tape-height: .7rem; }
   .mascot-sticker.desk-sticker { --sticker-shift: 3% 4%; }
-  .mascot-sticker--oral { --sticker-shift: 0 -.4rem; margin-inline-end: -.4rem; }
+  .mascot-sticker--oral { inset-block-start: -1.65rem; }
 }

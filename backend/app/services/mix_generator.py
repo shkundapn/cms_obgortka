@@ -51,9 +51,17 @@ def extract_text_from_upload(filename: str, raw_bytes: bytes) -> str:
 
     if lower.endswith((".html", ".htm")):
         html = raw_bytes.decode("utf-8", errors="ignore")
+        from app.services.video_transcriber import VideoTranscriberService
+
+        yt_urls = VideoTranscriberService.extract_youtube_urls_from_text(html, limit=10)
         text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r"<[^>]+>", " ", text)
-        return re.sub(r"\s+", " ", text).strip()
+        plain = re.sub(r"\s+", " ", text).strip()
+        missing_yt = [u for u in yt_urls if u not in plain]
+        if missing_yt:
+            yt_block = "\n".join(f"YouTube URL: {u}" for u in missing_yt)
+            return f"{plain}\n\n{yt_block}".strip() if plain else yt_block
+        return plain
 
     if lower.endswith(".docx"):
         try:

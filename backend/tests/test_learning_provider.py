@@ -296,6 +296,26 @@ async def test_transient_429_retries_with_retry_after_and_succeeds(monkeypatch):
     assert calls == 2
 
 
+@pytest.mark.asyncio
+async def test_latex_backslashes_and_wrapped_json_do_not_raise_incomplete_result(monkeypatch):
+    async def fake_generate(self, prompt, **kwargs):
+        if "multiple-choice" in prompt:
+            return '{"questions": [{"question": "Чому дорівнює $\\sum_{i=1}^n i$?", "options": ["$\\frac{n(n+1)}{2}$", "$n^2$"], "correct_index": "A", "explanation": "Формула суми."}]}'
+        if "flashcards" in prompt:
+            return '{"flashcards": [{"question": "Визначення $\\alpha$", "answer": "Кут або рівень значущості."}]}'
+        return '{"explanation": "## Ймовірність\\n\\nФормула Байєса: $P(A|B) = \\frac{P(B|A)P(A)}{P(B)}$, де $\\sum P(A_i) = 1$."}'
+
+    monkeypatch.setattr(GeminiService, "generate_content", fake_generate)
+    with learning_provider_scope(LearningProvider("test-key", "gemini-3-flash-preview", "vertex", strict=True)):
+        gen = get_mix_generator()
+        sec = await gen.generate_book_section("Ймовірність", "Формула Байєса та повна ймовірність.")
+        assert "\\frac" in sec.explanation_markdown
+        quizzes = await gen.generate_practice_quizzes("Ймовірність", ["Формула Байєса"])
+        assert len(quizzes) == 1 and quizzes[0].correct_index == 0
+        cards = await gen.generate_flashcards("Ймовірність", ["Формула Байєса"])
+        assert len(cards) == 1 and "\\alpha" in cards[0].front
+
+
 def test_prepare_topic_requires_key_and_owner(context):
     client, store = context
     bundle = seed(client)

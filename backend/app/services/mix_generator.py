@@ -658,7 +658,6 @@ class GeminiMixGenerator(StructuredPlaceholderMixGenerator):
             diagram = await self.gemini.generate_mermaid_diagram(title, key_points, course_title=course_title)
             if diagram:
                 return diagram
-        self.require_generated_content()
         return await super().generate_mermaid_diagram(title, key_points, course_title=course_title)
 
     async def generate_book_section(
@@ -787,15 +786,28 @@ class GeminiMixGenerator(StructuredPlaceholderMixGenerator):
             if ai_quizzes:
                 results = []
                 for q in ai_quizzes:
-                    question_txt = q.get("question")
-                    options = q.get("options")
-                    if question_txt and options and len(options) >= 2:
+                    if not isinstance(q, dict):
+                        continue
+                    question_txt = q.get("question") or q.get("prompt")
+                    options = q.get("options") or q.get("choices")
+                    if isinstance(options, dict):
+                        options = list(options.values())
+                    if question_txt and isinstance(options, list) and len(options) >= 2:
+                        raw_idx = q.get("correct_index", 0)
+                        if isinstance(raw_idx, str) and raw_idx.strip().upper() in ("A", "B", "C", "D"):
+                            c_idx = ord(raw_idx.strip().upper()) - ord("A")
+                        else:
+                            try:
+                                c_idx = int(raw_idx)
+                            except Exception:
+                                c_idx = 0
+                        c_idx = max(0, min(c_idx, len(options) - 1))
                         results.append(
                             PracticeQuestion(
-                                question=question_txt,
-                                options=options,
-                                correct_index=q.get("correct_index", 0),
-                                explanation=q.get("explanation", f"Пояснення до теми '{title}'."),
+                                question=str(question_txt),
+                                options=[str(o) for o in options],
+                                correct_index=c_idx,
+                                explanation=str(q.get("explanation") or f"Пояснення до теми '{title}'."),
                                 topic_ref=title,
                             )
                         )
@@ -820,10 +832,12 @@ class GeminiMixGenerator(StructuredPlaceholderMixGenerator):
             if ai_cards:
                 cards = []
                 for c in ai_cards:
-                    front = c.get("front")
-                    back = c.get("back")
+                    if not isinstance(c, dict):
+                        continue
+                    front = c.get("front") or c.get("question") or c.get("term")
+                    back = c.get("back") or c.get("answer") or c.get("definition")
                     if front and back:
-                        cards.append(Flashcard(front=front, back=back, tag=c.get("tag", title[:25])))
+                        cards.append(Flashcard(front=str(front), back=str(back), tag=str(c.get("tag") or title[:25])))
                 if cards:
                     return cards
         self.require_generated_content()

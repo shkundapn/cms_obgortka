@@ -43,6 +43,36 @@ def _retry_delay_seconds(resp: Optional[httpx.Response], retry_index: int) -> fl
     return default_delay
 
 
+def _parse_gemini_json(raw_text: str) -> Any:
+    """Parse JSON from Gemini output, repairing markdown fences and unescaped LaTeX backslashes."""
+    if not raw_text:
+        return None
+    clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text.strip(), flags=re.MULTILINE).strip()
+    if not clean:
+        return None
+    candidates = [clean]
+    first_brace, last_brace = clean.find("{"), clean.rfind("}")
+    first_bracket, last_bracket = clean.find("["), clean.rfind("]")
+    if first_brace != -1 and last_brace > first_brace:
+        candidates.append(clean[first_brace : last_brace + 1])
+    if first_bracket != -1 and last_bracket > first_bracket:
+        candidates.append(clean[first_bracket : last_bracket + 1])
+
+    for cand in candidates:
+        repaired = re.sub(
+            r"\\(frac|beta|binom|begin|bar|bold|theta|text|textbf|textit|times|tau|to|top|nabla|neq|ne|nu|notin|norm|right|rightarrow|rho|mathbb|mathcal|mathrm)\b",
+            r"\\\\\1",
+            cand,
+        )
+        repaired = re.sub(r'\\(?![/\"\\bfnrt]|u[0-9a-fA-F]{4})', r"\\\\", repaired)
+        for attempt_str in (repaired, cand):
+            try:
+                return json.loads(attempt_str)
+            except Exception:
+                pass
+    return None
+
+
 class GeminiService:
     """
     Client for Google Gemini API (AI Studio API key or Google Cloud Vertex AI).
@@ -134,6 +164,7 @@ class GeminiService:
             ],
             "generationConfig": {
                 "temperature": temperature,
+                "maxOutputTokens": 16384,
             },
         }
 
@@ -153,16 +184,24 @@ class GeminiService:
                 token_refreshed = False
                 rate_retries = 0
                 max_rate_retries = 3
+                vertex_fallbacks = [
+                    (self.vertex_location, self.model),
+                    ("global", "gemini-2.5-flash"),
+                    ("us-central1", "gemini-2.5-flash"),
+                    ("us-central1", "gemini-2.0-flash"),
+                ]
+                vertex_fb_idx = 0
                 while True:
                     if self.vertex_project:
+                        loc, mdl = vertex_fallbacks[min(vertex_fb_idx, len(vertex_fallbacks) - 1)]
                         host = (
                             "aiplatform.googleapis.com"
-                            if self.vertex_location == "global"
-                            else f"{self.vertex_location}-aiplatform.googleapis.com"
+                            if loc == "global"
+                            else f"{loc}-aiplatform.googleapis.com"
                         )
                         url = (
                             f"https://{host}/v1/projects/{self.vertex_project}/locations/"
-                            f"{self.vertex_location}/publishers/google/models/{self.model}:generateContent"
+                            f"{loc}/publishers/google/models/{mdl}:generateContent"
                         )
                         tok = await self._get_vertex_token(force_refresh=token_refreshed)
                         if not tok:
@@ -184,6 +223,17 @@ class GeminiService:
                     if self.vertex_project and resp.status_code == 401 and not token_refreshed:
                         _VERTEX_TOKEN_CACHE["token"] = None
                         token_refreshed = True
+                        continue
+
+                    if self.vertex_project and resp.status_code == 404 and vertex_fb_idx + 1 < len(vertex_fallbacks):
+                        vertex_fb_idx += 1
+                        next_loc, next_mdl = vertex_fallbacks[vertex_fb_idx]
+                        logger.warning(
+                            "Vertex AI model %s not found (404); falling back to %s (%s)",
+                            self.model,
+                            next_mdl,
+                            next_loc,
+                        )
                         continue
 
                     if resp.status_code in (429, 503) and rate_retries < max_rate_retries:
@@ -223,8 +273,9 @@ class GeminiService:
             candidates = data.get("candidates", [])
             if candidates:
                 resp_parts = candidates[0].get("content", {}).get("parts", [])
-                if resp_parts:
-                    return "\n".join(part.get("text", "") for part in resp_parts if not part.get("thought"))
+                non_thought = [part.get("text", "") for part in resp_parts if not part.get("thought") and part.get("text")]
+                if non_thought:
+                    return "\n".join(non_thought)
                 finish_reason = candidates[0].get("finishReason")
                 if finish_reason:
                     logger.warning("Gemini returned empty parts with finishReason=%s", finish_reason)
@@ -415,17 +466,27 @@ Return ONLY a JSON object:
             system_instruction="You write comprehensive, deep university textbook modules in Ukrainian strictly grounded in the course subject and video transcripts. Return JSON only.",
             json_mode=True,
             temperature=0.25,
-            timeout=50.0,
+            timeout=90.0,
         )
         if not res:
             return None
 
-        try:
-            clean_json = re.sub(r"^```(?:json)?\s*|\s*```$", "", res.strip(), flags=re.MULTILINE)
-            parsed = json.loads(clean_json)
-            return parsed if isinstance(parsed, dict) else None
-        except Exception:
-            return None
+        parsed = _parse_gemini_json(res)
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+            parsed = parsed[0]
+        if isinstance(parsed, dict):
+            if not parsed.get("explanation_markdown"):
+                for alt_key in ("explanation", "markdown", "content_markdown", "content", "text", "chapter"):
+                    val = parsed.get(alt_key)
+                    if isinstance(val, str) and val.strip():
+                        parsed["explanation_markdown"] = val.strip()
+                        break
+            elif isinstance(parsed.get("explanation_markdown"), list):
+                parsed["explanation_markdown"] = "\n\n".join(str(x) for x in parsed["explanation_markdown"] if x)
+            if parsed.get("explanation_markdown"):
+                return parsed
+        logger.warning("Gemini generate_book_section_content returned unparseable JSON (len=%d)", len(res))
+        return None
 
     async def generate_practice_quizzes(
         self,
@@ -478,13 +539,17 @@ Return ONLY a JSON array:
         if not res:
             return None
 
-        try:
-            clean_json = re.sub(r"^```(?:json)?\s*|\s*```$", "", res.strip(), flags=re.MULTILINE)
-            data = json.loads(clean_json)
-            if isinstance(data, list):
-                return data
-        except Exception:
-            pass
+        data = _parse_gemini_json(res)
+        if isinstance(data, dict):
+            data = (
+                data.get("questions")
+                or data.get("quizzes")
+                or data.get("items")
+                or next((v for v in data.values() if isinstance(v, list)), None)
+            )
+        if isinstance(data, list):
+            return data
+        logger.warning("Gemini generate_practice_quizzes returned unparseable JSON (len=%d)", len(res))
         return None
 
     async def generate_flashcards(
@@ -533,13 +598,17 @@ Return ONLY a JSON array:
         if not res:
             return None
 
-        try:
-            clean_json = re.sub(r"^```(?:json)?\s*|\s*```$", "", res.strip(), flags=re.MULTILINE)
-            data = json.loads(clean_json)
-            if isinstance(data, list):
-                return data
-        except Exception:
-            pass
+        data = _parse_gemini_json(res)
+        if isinstance(data, dict):
+            data = (
+                data.get("flashcards")
+                or data.get("cards")
+                or data.get("items")
+                or next((v for v in data.values() if isinstance(v, list)), None)
+            )
+        if isinstance(data, list):
+            return data
+        logger.warning("Gemini generate_flashcards returned unparseable JSON (len=%d)", len(res))
         return None
 
     async def generate_mermaid_diagram(
@@ -578,6 +647,9 @@ Rules:
         clean = re.sub(r"^```(?:mermaid)?\s*|\s*```$", "", res.strip(), flags=re.MULTILINE).strip()
         if clean.startswith("flowchart") or clean.startswith("graph"):
             return clean
+        m = re.search(r"((?:flowchart|graph)\s+(?:TD|TB|LR|RL|BT)\b[\s\S]*)", clean)
+        if m:
+            return m.group(1).strip()
         return None
 
     _EXPERT_VIDEO_ANALYST_INSTRUCTIONS = (

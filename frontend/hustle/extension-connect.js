@@ -1,8 +1,22 @@
 (() => {
  const $=s=>document.querySelector(s);
- const pending=new Map(); let installed=false, config, checking=false, waiting=false, busy=false;
+ const pending=new Map(); let installed=false, config, checking=false, waiting=false, busy=false, connectTracker=null;
  const browserAddress=navigator.userAgent.includes('Edg/')?'edge://extensions':'chrome://extensions';
  $('#extensions-address').textContent=browserAddress;
+ function stopConnectProgress() { connectTracker?.stop({remove: true}); connectTracker = null; }
+ function showConnectProgress(opts) {
+  stopConnectProgress();
+  const statusEl = $('#extension-status');
+  if (!statusEl) return;
+  if (!window.HustleProgress) {
+   statusEl.textContent = opts.detail || opts.title;
+   return;
+  }
+  statusEl.textContent = '';
+  let slot = $('#extension-progress-slot');
+  if (!slot) { slot = document.createElement('div'); slot.id = 'extension-progress-slot'; statusEl.after(slot); }
+  connectTracker = window.HustleProgress.mount(slot, opts);
+ }
  function extension(type, extra={}) {
   return new Promise((resolve,reject)=>{
    const id=crypto.randomUUID(); const timer=setTimeout(()=>{pending.delete(id);reject(new Error('Онови сторінку після встановлення розширення.'));},type==='PING'?1200:25000);
@@ -15,8 +29,8 @@
   clearTimeout(request.timer);pending.delete(event.data.id);
   if(event.data.success)request.resolve(event.data);else request.reject(new Error(event.data.error||'Не вдалося підключитися.'));
  });
- function error(err) {$('#extension-error').textContent=err.message;$('#extension-error').hidden=false;}
- function success() {waiting=false;$('#extension-success').hidden=false;$('#extension-connect-form').hidden=true;$('#extension-install').hidden=true;$('#extension-status').textContent='';$('#extension-error').hidden=true;}
+ function error(err) {stopConnectProgress();$('#extension-error').textContent=err.message;$('#extension-error').hidden=false;}
+ function success() {waiting=false;stopConnectProgress();$('#extension-success').hidden=false;$('#extension-connect-form').hidden=true;$('#extension-install').hidden=true;$('#extension-status').textContent='';$('#extension-error').hidden=true;}
  async function detect() {
   if(checking || document.hidden)return;checking=true;
   try {await extension('PING');installed=true;$('#extension-install').hidden=true;if(!waiting && !busy)$('#extension-status').textContent='Розширення встановлено';}
@@ -34,11 +48,25 @@
   } catch { /* Keep waiting for explicit login; never fake a successful pairing. */ }
  }
  $('#extension-connect-form').addEventListener('submit',async event=>{
-  event.preventDefault();busy=true;$('#connect-moodle').disabled=true;$('#extension-error').hidden=true;$('#extension-status').textContent='Підключаємо Moodle…';
+  event.preventDefault();busy=true;$('#connect-moodle').disabled=true;$('#extension-error').hidden=true;$('#extension-status').textContent='';
+  showConnectProgress({
+   title: 'Підключаємо Moodle…',
+   stages: ['Звертаємось до розширення браузера', 'Перевіряємо сесію Moodle'],
+   expectedSec: 8,
+   compact: true,
+  });
   try {
    const result=await extension('CONNECT',{moodleOrigin:$('#moodle-origin').value});
    if(result.paired)success();
-   else {waiting=true;$('#extension-status').textContent='Увійди у відкритій вкладці Moodle. Підключення з’явиться тут.';$('#connect-moodle').textContent='Увійти в Moodle повторно →';}
+   else {
+    waiting=true;
+    showConnectProgress({
+     title: 'Очікуємо вхід у Moodle…',
+     detail: 'Увійди у відкритій вкладці Moodle — підключення з’явиться тут автоматично.',
+     compact: true,
+    });
+    $('#connect-moodle').textContent='Увійти в Moodle повторно →';
+   }
   } catch(err) {error(err);$('#extension-status').textContent='Підключення не завершено';}
   finally {busy=false;$('#connect-moodle').disabled=!installed;}
  });
@@ -47,6 +75,7 @@
  $('#copy-extensions').onclick=async()=>{try {await navigator.clipboard.writeText(browserAddress);$('#copy-extensions').textContent='Скопійовано';}catch {$('#extensions-address').tabIndex=0;$('#extensions-address').focus();}};
  $('#manual-connect-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.target,button=form.querySelector('button');button.disabled=true;$('#extension-error').hidden=true;
+  showConnectProgress({title: 'Перевіряємо токен Moodle…', expectedSec: 6, compact: true});
   try {
    const url=new URL(form.elements.url.value);if(url.protocol!=='https:'||url.username||url.password)throw new Error('Вкажи HTTPS-адресу LMS.');
    await UI.post('/api/auth/login',{moodle_url:url.origin,token:form.elements.token.value.trim()});form.elements.token.value='';success();

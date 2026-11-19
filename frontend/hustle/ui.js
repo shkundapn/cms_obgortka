@@ -81,25 +81,30 @@ async fallbackViaExtension(path) {
  return null;
 },
 async api(path, options = {}) {
- const { _retried, ...fetchOptions } = options;
- let response = await fetch(path, {credentials:'same-origin', ...fetchOptions});
- if (response.status === 401 && !_retried && !String(path).startsWith('/api/auth/')) {
-  if (await this.refreshSession()) {
-   response = await fetch(path, {credentials:'same-origin', ...fetchOptions});
+ const { _retried, _progressLabel, _silent, ...fetchOptions } = options;
+ const finishTrack = _silent ? undefined : window.HustleProgress?.trackRequest(path, _progressLabel);
+ try {
+  let response = await fetch(path, {credentials:'same-origin', ...fetchOptions});
+  if (response.status === 401 && !_retried && !String(path).startsWith('/api/auth/')) {
+   if (await this.refreshSession()) {
+    response = await fetch(path, {credentials:'same-origin', ...fetchOptions});
+   }
   }
+  if (response.status === 502) {
+   const extData = await this.fallbackViaExtension(path).catch(() => null);
+   if (extData !== null) return extData;
+  }
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+   const detail = data?.detail;
+   const err = new Error(response.status === 503 ? 'Сервіс ще не налаштований. Спробуй гостьовий простір.' : response.status === 401 ? 'Сесія завершилася. Увійди ще раз.' : typeof detail === 'string' ? detail : 'Не вдалося виконати дію. Спробуй ще раз.');
+   err.status = response.status;
+   throw err;
+  }
+  return data;
+ } finally {
+  finishTrack?.();
  }
- if (response.status === 502) {
-  const extData = await this.fallbackViaExtension(path).catch(() => null);
-  if (extData !== null) return extData;
- }
- const data = await response.json().catch(() => null);
- if (!response.ok) {
-  const detail = data?.detail;
-  const err = new Error(response.status === 503 ? 'Сервіс ще не налаштований. Спробуй гостьовий простір.' : response.status === 401 ? 'Сесія завершилася. Увійди ще раз.' : typeof detail === 'string' ? detail : 'Не вдалося виконати дію. Спробуй ще раз.');
-  err.status = response.status;
-  throw err;
- }
- return data;
 },
 markdown(value) {
  const source = window.HustleMath ? HustleMath.protectMarkdown(String(value || '')) : String(value || '');

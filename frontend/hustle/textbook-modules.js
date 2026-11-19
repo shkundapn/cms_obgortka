@@ -538,6 +538,18 @@
       }
       if (errEl) errEl.textContent = '';
       if (btn) { btn.disabled = true; btn.textContent = 'AI перевіряє…'; }
+      let progressSlot = form.querySelector('[data-tm-tutor-progress]');
+      if (!progressSlot) {
+        progressSlot = document.createElement('div');
+        progressSlot.setAttribute('data-tm-tutor-progress', '');
+        form.append(progressSlot);
+      }
+      const tutorTracker = window.HustleProgress?.mount(progressSlot, {
+        title: 'AI-тютор перевіряє відповідь…',
+        stages: ['Читаємо твою відповідь', 'Звіряємо з конспектом модуля', 'Формуємо відгук і підказки'],
+        expectedSec: 9,
+        compact: true,
+      });
       try {
         const res = await apiReq(
           `/api/workspace/courses/${encodeURIComponent(courseId)}/topics/${encodeURIComponent(topicIndex)}/modules/${encodeURIComponent(moduleId)}/tutor-check`,
@@ -547,11 +559,13 @@
             body: JSON.stringify({ answer_text: answerText }),
           }
         );
+        tutorTracker?.stop({remove: true});
         inlineTutorResults.set(`${courseId}:${topicIndex}:${moduleId}`, res);
         if (res?.learning_progress) progressCache.set(String(courseId), res.learning_progress);
         if (form.elements.answer_text) form.elements.answer_text.value = '';
         window.dispatchEvent(new CustomEvent('hustle:rerender-module'));
       } catch (err) {
+        tutorTracker?.stop({remove: true});
         if (errEl) errEl.textContent = err.message;
         if (btn) { btn.disabled = false; btn.textContent = 'Перевірити відповідь у AI-тютора →'; }
       }

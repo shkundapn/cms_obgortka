@@ -25,6 +25,35 @@
       if (dialog.open) dialog.addEventListener('close', () => action.focus({preventScroll:true}), {once:true});
     });
   }
+  function trackStudyDialog(dialog) {
+    const viewport = parent.visualViewport;
+    const header = frame.ownerDocument.querySelector('.workspace-topbar');
+    const listeners = new AbortController();
+    const align = () => {
+      if (!frame.isConnected) { listeners.abort(); return; }
+      if (!dialog.open) return;
+      const bounds = frame.getBoundingClientRect();
+      const viewportTop = viewport?.offsetTop ?? 0;
+      const top = Math.max(bounds.top, viewportTop, header?.getBoundingClientRect().bottom ?? 0);
+      const bottom = Math.min(bounds.bottom, viewportTop + (viewport?.height ?? parent.innerHeight));
+      if (bottom - top < 24) return;
+      dialog.style.setProperty('--workspace-dialog-start', `${top - bounds.top}px`);
+      dialog.style.setProperty('--workspace-dialog-end', `${bounds.bottom - bottom}px`);
+      dialog.style.setProperty('--workspace-dialog-space', `${bottom - top}px`);
+    };
+    const observer = new MutationObserver(align);
+    observer.observe(dialog, { attributes: true, attributeFilter: ['open'] });
+    const options = { passive: true, signal: listeners.signal };
+    parent.addEventListener('scroll', align, options);
+    parent.addEventListener('resize', align, options);
+    viewport?.addEventListener('scroll', align, options);
+    viewport?.addEventListener('resize', align, options);
+    window.addEventListener('pagehide', () => {
+      listeners.abort();
+      observer.disconnect();
+    }, { once: true });
+    return align;
+  }
   document.addEventListener('click', e => {
     const sticker = e.target.closest('.reward-donkey--scene[data-reward-find]');
     if (sticker) { parent.HustleRewards?.find(sticker); return; }
@@ -55,7 +84,11 @@
     }
     const main = document.querySelector('#workspace-main');
     placeMaterialsAction(main);
-    const resize = () => { frame.style.height = Math.max(530, main.offsetHeight + 20) + 'px'; };
+    const alignDialog = trackStudyDialog(document.querySelector('#study-dialog'));
+    const resize = () => {
+      frame.style.height = Math.max(530, main.offsetHeight + 20) + 'px';
+      alignDialog();
+    };
     new ResizeObserver(resize).observe(main); resize();
   });
 })();

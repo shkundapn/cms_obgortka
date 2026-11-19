@@ -399,7 +399,7 @@
   }
 
   const pageOperations = new Set();
-  let pageSpinner, pageAnnouncement;
+  let pageProgress, pageAnnouncement;
   let showTimer = null, hideTimer = null, connectionTimer = null, visibleSince = 0;
 
   function syncPageActivity() {
@@ -410,25 +410,25 @@
       clearTimeout(hideTimer);
       hideTimer = null;
       if (!connectionTimer) connectionTimer = setInterval(syncPageActivity, 400);
-      if (pageSpinner.hidden && !showTimer) {
+      if (pageProgress.dataset.active !== 'true' && !showTimer) {
         showTimer = setTimeout(() => {
           showTimer = null;
           const active = [...pageOperations].filter(operation => !operation.isCurrent || operation.isCurrent());
           if (!active.length) return;
           visibleSince = Date.now();
-          pageSpinner.hidden = false;
+          pageProgress.dataset.active = 'true';
           pageAnnouncement.textContent = active.length === 1 ? active[0].label : 'Завантажуємо дані…';
-        }, 550);
+        }, 180);
       }
       return;
     }
     clearTimeout(showTimer);
     clearInterval(connectionTimer);
     showTimer = connectionTimer = null;
-    if (!pageSpinner.hidden && !hideTimer) {
+    if (pageProgress.dataset.active === 'true' && !hideTimer) {
       hideTimer = setTimeout(() => {
         hideTimer = null;
-        pageSpinner.hidden = true;
+        pageProgress.dataset.active = 'false';
         pageAnnouncement.textContent = '';
       }, Math.max(160, 400 - (Date.now() - visibleSince)));
     }
@@ -441,15 +441,14 @@
     if (frame?.classList.contains('paper-course-tools') && window.parent.HustleProgress?.trackPageActivity) {
       return window.parent.HustleProgress.trackPageActivity(label, () => frame.isConnected && (!isCurrent || isCurrent()));
     }
-    if (!pageSpinner) {
-      pageSpinner = document.createElement('span');
-      pageSpinner.className = 'hp-page-spinner';
-      pageSpinner.hidden = true;
-      pageSpinner.innerHTML = '<progress class="loading-spinner" aria-hidden="true"></progress>';
+    if (!pageProgress) {
+      pageProgress = document.createElement('span');
+      pageProgress.className = 'hp-page-progress';
+      pageProgress.setAttribute('aria-hidden', 'true');
       pageAnnouncement = document.createElement('span');
       pageAnnouncement.className = 'hp-screen-reader-status';
       pageAnnouncement.setAttribute('role', 'status');
-      document.body.append(pageSpinner, pageAnnouncement);
+      document.body.append(pageProgress, pageAnnouncement);
     }
     const operation = { label: label || 'Завантажуємо дані…', isCurrent };
     pageOperations.add(operation);

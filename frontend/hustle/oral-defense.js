@@ -110,6 +110,7 @@
   function cleanupSession() {
     if (!session) return;
     session.aborted = true;
+    session.progressTracker?.stop({ remove: true });
     stopTTS(session);
     if (session.recorder && session.recorder.state !== 'inactive') {
       try { session.recorder.onstop = null; session.recorder.stop(); } catch {}
@@ -610,12 +611,24 @@
       : 'is-ready';
 
     const locked = ['arming','recording','evaluating','loading_question'].includes(state.phase);
+    const setup = state.phase === 'intro';
+    const difficulty = `<div class="od-difficulty" role="group" ${setup ? 'aria-labelledby="od-level-title"' : 'aria-label="Рівень складності"'}>
+      ${[
+        ['standard', 'Базовий', 'Ключові поняття й означення'],
+        ['deep', 'Поглиблений', 'Зв’язки й обґрунтування'],
+      ].map(([level, label, detail]) => `<button type="button" data-od-diff="${level}" ${locked ? 'disabled' : ''} aria-pressed="${state.difficulty === level}">
+        <span>${label}</span>${setup ? `<small>${detail}</small>` : ''}</button>`).join('')}
+    </div>`;
     let bodyContent = '';
 
-    if (state.phase === 'intro') {
-      bodyContent = `<div class="od-intro"><p>Почуй питання за матеріалами теми. Відповідай голосом або текстом, щоб отримати розбір від Gemini.</p>
-        <button class="primary" type="button" data-od-next-question>Почати захист ${UI.icon('arrow')}</button>
-        <span data-od-history></span></div>`;
+    if (setup) {
+      bodyContent = `<div class="od-intro">
+        <div><h3 id="od-level-title">Рівень складності</h3>${difficulty}</div>
+        <p>Відповідай голосом або текстом.</p>
+        <div class="od-intro-actions"><span data-od-history></span>
+          <button class="primary" type="button" data-od-next-question>Почати захист ${UI.icon('arrow')}</button>
+        </div>
+      </div>`;
     } else if (state.phase === 'history') {
       bodyContent = `<h3>${esc(state.latest.question_text)}</h3>${renderFeedback(state.latest)}`;
     } else if (state.phase === 'needs_key') {
@@ -736,20 +749,20 @@
       }
     }
 
-    body.innerHTML = `
-      <div class="od-shell">
-        <header class="od-header">
+    const heading = setup
+      ? `<header class="od-setup-header"><h2 id="dialog-title" tabindex="-1">Усний захист</h2>
+          ${state.topicTitle === 'Усний захист' ? '' : `<p>${esc(state.topicTitle)}</p>`}</header>`
+      : `<header class="od-header">
           <div>
             <span class="od-badge">Усний захист</span>
             <h2 id="dialog-title">${esc(state.topicTitle)}</h2>
           </div>
-          <div class="od-controls-top" ${['history','feedback'].includes(state.phase) ? 'hidden' : ''}>
-            <div class="od-difficulty" role="group" aria-label="Рівень питань">
-              <button type="button" data-od-diff="standard" ${locked ? 'disabled' : ''} aria-pressed="${state.difficulty === 'standard'}">Базовий</button>
-              <button type="button" data-od-diff="deep" ${locked ? 'disabled' : ''} aria-pressed="${state.difficulty === 'deep'}">Поглиблений</button>
-            </div>
-          </div>
-        </header>
+          <div class="od-controls-top" ${['history','feedback'].includes(state.phase) ? 'hidden' : ''}>${difficulty}</div>
+        </header>`;
+
+    body.innerHTML = `
+      <div class="od-shell${setup ? ' od-shell--setup' : ''}">
+        ${heading}
         ${bodyContent}
       </div>
     `;
@@ -761,6 +774,7 @@
         if (slot) {
           state.progressTracker = window.HustleProgress.mount(slot, {
             title: 'Формулюємо запитання…',
+            detail: 'Готуємо запитання за матеріалами теми…',
             stages: ['Аналізуємо конспект теми', 'Добираємо запитання потрібного рівня'],
             expectedSec: 8,
             compact: true,
@@ -785,6 +799,7 @@
     dialog.classList.add('oral-defense-modal');
     render();
     if (!dialog.open) dialog.showModal();
+    body.querySelector('#dialog-title').focus({ preventScroll: true });
     const active = session;
     const node = active.nodeId ? '?node_id=' + encodeURIComponent(active.nodeId) : '';
     active.historyRequest = apiRequest(`/api/workspace/courses/${encodeURIComponent(active.courseId)}/topics/${active.topicIndex}/oral-defense/latest${node}`).then(({attempt}) => {

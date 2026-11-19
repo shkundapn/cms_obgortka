@@ -528,12 +528,12 @@ async function fetchAssignmentsViaBrowser(moodleOrigin, portalUrl = null, course
       callMoodleAjax(moodleOrigin, ctx.sesskey, 'core_course_get_enrolled_courses_by_timeline_classification', {
         offset: 0,
         limit: 0,
-        classification: 'inprogress',
+        classification: 'all',
         sort: 'fullname',
       }),
     ]);
     const batches = [recentData?.events || [], allData?.events || []];
-    const enrolled = Array.isArray(coursesData?.courses) ? coursesData.courses.slice(0, 15) : [];
+    const enrolled = Array.isArray(coursesData?.courses) ? coursesData.courses.slice(0, 25) : [];
     if (enrolled.length) {
       let cIdx = 0;
       const cWorkers = Array.from({ length: Math.min(4, enrolled.length) }, async () => {
@@ -582,7 +582,40 @@ async function fetchAssignmentsViaBrowser(moodleOrigin, portalUrl = null, course
     };
   });
 
-  if (portalUrl) {
+  if (!assignments.length && courseId) {
+    try {
+      const idxRes = await fetch(`${moodleOrigin}/mod/assign/index.php?id=${Number(courseId)}`, { credentials: 'include' });
+      if (idxRes.ok) {
+        const idxHtml = await idxRes.text().catch(() => '');
+        const seenCmids = new Set();
+        const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+        let rm;
+        while ((rm = rowRe.exec(idxHtml)) !== null) {
+          const rowHtml = rm[1];
+          const linkMatch = rowHtml.match(/<a[^>]+href=["'][^"']*\/mod\/assign\/view\.php\?[^"']*?\bid=(\d+)[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
+          if (!linkMatch) continue;
+          const cmid = Number(linkMatch[1]);
+          const name = stripHtmlText(linkMatch[2]);
+          if (!cmid || !name || seenCmids.has(cmid)) continue;
+          seenCmids.add(cmid);
+          const tsMatch = rowHtml.match(/data-timestamp=["'](\d+)["']/i);
+          assignments.push({
+            id: cmid,
+            cmid,
+            course_id: Number(courseId),
+            course_name: '',
+            name,
+            duedate: tsMatch ? Number(tsMatch[1]) : null,
+            allowsubmissionsfromdate: null,
+            intro: '',
+            modulename: 'assign',
+          });
+        }
+      }
+    } catch {}
+  }
+
+  if (portalUrl && assignments.length) {
     try {
       const saveRes = await fetch(`${portalUrl}/api/assignments/from-browser`, {
         method: 'POST',

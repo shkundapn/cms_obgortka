@@ -153,8 +153,8 @@ async def open_workspace(request: Request):
 async def course_tools():
     source = (Path(hustle_dir) / "app.html").read_text(encoding="utf-8")
     return HTMLResponse(source.replace("<head>", '<head><link rel="stylesheet" href="/prototype/course-tools.css?v=38c95bf0">'
-                                       '<link rel="stylesheet" href="/prototype/rewards.css?v=20261119-study-overview">'
-                                       '<script defer src="/prototype/course-tools.js?v=20261119-progress"></script>'),
+                                       '<link rel="stylesheet" href="/prototype/rewards.css?v=20261119-donkey-hunt">'
+                                       '<script defer src="/prototype/course-tools.js?v=20261119-donkey-hunt"></script>'),
                         headers={"Cache-Control": "no-cache"})
 
 
@@ -211,16 +211,16 @@ async def paper_workspace(request: Request, response: Response):
         '<script defer src="/hustle/dashboard-today.js?v=dc64ce8d"></script>'
         '<link rel="stylesheet" href="/hustle/moodle-picker.css">'
         '<script defer src="/hustle/moodle-picker.js?v=20261119-loading"></script>'
-        '<script defer src="paper-workspace.js?v=20261119-deadlines"></script>'
+        '<script defer src="paper-workspace.js?v=20261119-donkey-hunt"></script>'
         '<script defer src="calendar-connected.js?v=69542340"></script>'
         '<link rel="stylesheet" href="/hustle/oral-defense.css">'
         '<link rel="stylesheet" href="/hustle/anki-dashboard.css?v=8dd88c40">'
         '<script defer src="/hustle/oral-defense.js?v=20261119-progress"></script>'
         '<script defer src="oral-practice.js?v=20261119-album"></script>'
         '<script defer src="/hustle/vendor/srs-engine.js?v=20261119b"></script>'
-        '<script defer src="/hustle/anki-dashboard.js?v=20261119-anki-avatar-v2"></script>'
-        '<link rel="stylesheet" href="/prototype/rewards.css?v=20261119-study-overview">'
-        '<script defer src="/prototype/rewards.js?v=20261119-study-overview"></script>'
+        '<script defer src="/hustle/anki-dashboard.js?v=20261119-donkey-hunt"></script>'
+        '<link rel="stylesheet" href="/prototype/rewards.css?v=20261119-donkey-hunt">'
+        '<script defer src="/prototype/rewards.js?v=20261119-donkey-hunt"></script>'
     )
     return page.replace("<!-- connected-calendar -->", calendar_assets)
 

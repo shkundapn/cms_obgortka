@@ -1,6 +1,7 @@
 import asyncio
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from app.core.exceptions import MoodleAuthError, MoodleException
 from app.core.security import get_current_user_session
 from app.models.grade import GradeOverviewResponse, CourseGrades, GradeItem
@@ -113,3 +114,59 @@ async def get_my_grades(
 
     course_grades_list = list(await asyncio.gather(*(_fetch_course_grade(c) for c in target_courses)))
     return GradeOverviewResponse(courses=course_grades_list)
+
+
+class BrowserCourseGradeInput(BaseModel):
+    course_id: int
+    course_fullname: str = ""
+    grade_items: Optional[List[Dict[str, Any]]] = None
+    report_html: Optional[str] = None
+
+
+class BrowserGradesParseRequest(BaseModel):
+    courses: List[BrowserCourseGradeInput]
+
+
+@router.post("/from-browser", response_model=GradeOverviewResponse)
+async def parse_grades_from_browser(
+    req: BrowserGradesParseRequest,
+    session: Dict[str, Any] = Depends(get_current_user_session),
+):
+    """Parse Moodle grade report HTML or AJAX items fetched inside the user's browser when VM is blocked."""
+    client = MoodleClient(base_url=session.get("site_url"))
+    results: List[CourseGrades] = []
+    for entry in req.courses:
+        raw_items: List[Dict[str, Any]] = []
+        if entry.grade_items:
+            raw_items = entry.grade_items
+        elif entry.report_html:
+            if client._looks_like_login_html(entry.report_html):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Moodle session expired.")
+            raw_items = client._parse_user_grades_html(entry.report_html)
+
+        items: List[GradeItem] = []
+        for raw_item in raw_items:
+            item_name = raw_item.get("itemname") or ("Course Total" if raw_item.get("itemtype") == "course" else "Item")
+            raw_grade = raw_item.get("gradeformatted")
+            if raw_grade is None:
+                raw_grade = raw_item.get("graderaw")
+            items.append(
+                GradeItem(
+                    id=raw_item.get("id"),
+                    itemname=item_name,
+                    itemtype=raw_item.get("itemtype"),
+                    gradeformatted=str(raw_grade) if raw_grade is not None else None,
+                    grademin=raw_item.get("grademin"),
+                    grademax=raw_item.get("grademax"),
+                    percentageformatted=raw_item.get("percentageformatted"),
+                    feedback=raw_item.get("feedback"),
+                )
+            )
+        results.append(
+            CourseGrades(
+                course_id=entry.course_id,
+                course_fullname=entry.course_fullname or f"Course #{entry.course_id}",
+                grade_items=items,
+            )
+        )
+    return GradeOverviewResponse(courses=results)

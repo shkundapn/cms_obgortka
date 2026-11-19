@@ -65,7 +65,7 @@ class _FastDOMNode:
 
     def get_markdown(self) -> str:
         """Keep source paragraphs/headings/lists in DOM order, without raw HTML."""
-        if self.tag in {"script", "style"} or self.classes.intersection({"accesshide", "sr-only"}):
+        if self.tag in {"script", "style"} or self.classes.intersection({"accesshide", "sr-only", "visually-hidden", "d-none"}):
             return ""
         body = "".join(p if isinstance(p, str) else p.get_markdown() for p in self.content_parts)
         if self.tag == "br":
@@ -80,7 +80,7 @@ class _FastDOMNode:
 
     def get_text(self, exclude_classes: Optional[set] = None) -> str:
         exclude_classes = exclude_classes or set()
-        if self.classes.intersection(exclude_classes):
+        if self.classes.intersection(exclude_classes) or self.tag in {"script", "style", "input"}:
             return ""
         parts = list(self.text_parts)
         for c in self.children:
@@ -1043,7 +1043,12 @@ class MoodleClient:
             sec_num = int(sec_id_m.group(1)) if sec_id_m else sec_counter
             sec_counter += 1
 
-            # Section title
+            # Section title (exclude Moodle 4 Boost/RemUI UI controls & visually-hidden labels)
+            ui_exclude = {
+                "accesshide", "sr-only", "visually-hidden", "d-none",
+                "icons-collapse-expand", "section-collapsemenu", "bulkselect",
+                "quickediticon", "quickeditlink", "editinstructions", "custom-control",
+            }
             title_node = None
             for cand in sec_node.find_all():
                 if any(p in raw_sections for p in _get_dom_parents(cand, stop_at=sec_node)):
@@ -1053,8 +1058,19 @@ class MoodleClient:
                     break
                 if cand.tag in ("h3", "h4") and not title_node and not any(c in cand.classes for c in ("activity-title", "activityname")):
                     title_node = cand
-            clean_title = title_node.get_text({"accesshide", "sr-only"}) if title_node else ("General" if sec_num == 0 else f"Section {sec_num}")
-            if not clean_title.strip():
+            raw_title = ""
+            if title_node:
+                link_node = next(
+                    (
+                        a for a in title_node.find_all(tag="a")
+                        if not a.classes.intersection(ui_exclude)
+                        and ("section" in (a.attrs.get("href") or "") or "#section-" in (a.attrs.get("href") or ""))
+                    ),
+                    None,
+                )
+                raw_title = (link_node or title_node).get_text(ui_exclude)
+            clean_title = self._strip_moodle_ui_chrome(raw_title)
+            if not clean_title:
                 clean_title = "General" if sec_num == 0 else f"Section {sec_num}"
 
             # Section summary
@@ -1547,6 +1563,15 @@ class MoodleClient:
         page_html = res.text
         return self.parse_course_page_html(page_html)
 
+    @staticmethod
+    def _strip_moodle_ui_chrome(text: str) -> str:
+        return re.sub(
+            r"^(?:(?:Виберіть секцію|Select section|Нова секція|New section|Згорнути|Розгорнути|Collapse|Expand|Редагувати назву)\s*)+",
+            "",
+            (text or "").strip(),
+            flags=re.IGNORECASE,
+        ).strip()
+
     def parse_course_page_html(self, page_html: str) -> List[Dict[str, Any]]:
         """Parse a Moodle /course/view.php?id=... HTML page into structured sections."""
         if self._looks_like_login_html(page_html):
@@ -1571,7 +1596,17 @@ class MoodleClient:
                 continue
             sec_idx = int(sec_id_m.group(1))
             name_m = re.search(r'<h3[^>]*class="[^"]*sectionname[^"]*"[^>]*>(.*?)</h3>', block, flags=re.DOTALL | re.IGNORECASE)
-            sec_name = self._clean_html_text(name_m.group(1)) if name_m else f"Section {sec_idx}"
+            if name_m:
+                raw_sec_html = re.sub(
+                    r'<span[^>]*class="[^"]*(?:accesshide|sr-only|visually-hidden|d-none)[^"]*"[^>]*>.*?</span>'
+                    r'|<a[^>]*class="[^"]*icons-collapse-expand[^"]*"[^>]*>.*?</a>',
+                    " ",
+                    name_m.group(1),
+                    flags=re.DOTALL | re.IGNORECASE,
+                )
+                sec_name = self._strip_moodle_ui_chrome(self._clean_html_text(raw_sec_html)) or f"Section {sec_idx}"
+            else:
+                sec_name = f"Section {sec_idx}"
             sum_m = re.search(r'<div[^>]*class="[^"]*summary[^"]*"[^>]*>(.*?)</div>', block, flags=re.DOTALL | re.IGNORECASE)
             sec_summary = self._clean_html_text(sum_m.group(1)) if sum_m else ""
 

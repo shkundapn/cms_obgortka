@@ -651,6 +651,13 @@ async def upload_course_material(
     }
 
 
+class BrowserModuleContent(BaseModel):
+    module_id: int
+    text_excerpt: Optional[str] = None
+    attachment_filename: Optional[str] = None
+    attachment_base64: Optional[str] = None
+
+
 class BackendMoodleSyncRequest(BaseModel):
     course_title: Optional[str] = None
     shortname: Optional[str] = None
@@ -658,6 +665,7 @@ class BackendMoodleSyncRequest(BaseModel):
     tools_config: Optional[CourseToolsConfig] = None
     fetch_files: bool = True
     course_html: Optional[str] = None
+    module_contents: Optional[List[BrowserModuleContent]] = None
 
 
 @router.post("/api/workspace/courses/{course_id}/sync-moodle")
@@ -967,6 +975,24 @@ async def sync_course_from_moodle_backend(
                     parsed_text = dl_out.get("parsed_text")
                     if parsed_text:
                         extracted_excerpt = f"{mod_desc}\n\n{parsed_text}".strip() if mod_desc else parsed_text
+                elif req_body.module_contents:
+                    browser_item = next((bc for bc in req_body.module_contents if bc.module_id == mod_id), None)
+                    if browser_item:
+                        parts: List[str] = [mod_desc] if mod_desc else []
+                        if browser_item.text_excerpt and browser_item.text_excerpt.strip():
+                            parts.append(browser_item.text_excerpt.strip())
+                        if browser_item.attachment_base64 and browser_item.attachment_filename:
+                            import base64
+                            try:
+                                raw_b = base64.b64decode(browser_item.attachment_base64.encode("ascii"), validate=True)
+                                if 0 < len(raw_b) <= settings.TEMP_STORAGE_MAX_FILE_BYTES and is_allowed_staging_filename(browser_item.attachment_filename):
+                                    file_hashes.append(compute_content_hash(raw_b.decode("latin-1", errors="ignore")[:8192]))
+                                    parsed_att = await asyncio.to_thread(extract_text_from_upload, browser_item.attachment_filename, raw_b)
+                                    if parsed_att and parsed_att.strip():
+                                        parts.append(parsed_att.strip())
+                            except Exception:
+                                pass
+                        extracted_excerpt = "\n\n".join(p for p in parts if p).strip()
 
                 if not reused:
                     from app.services.video_transcriber import VideoTranscriberService
@@ -1128,11 +1154,16 @@ async def get_workspace_course(
     }
 
 
+class CheckUpdatesRequest(BaseModel):
+    course_html: Optional[str] = None
+
+
 @router.post("/api/workspace/courses/{course_id}/check-updates")
 async def check_course_updates(
     course_id: int,
     request: Request,
     force: bool = Query(default=False),
+    req: Optional[CheckUpdatesRequest] = None,
     owner: WorkspaceOwner = Depends(get_workspace_owner),
 ) -> Dict[str, Any]:
     """Explicitly check Moodle upstream for new/updated course materials and map them to weekly syllabus topics."""
@@ -1140,12 +1171,18 @@ async def check_course_updates(
     session = get_optional_moodle_session(request)
     client = MoodleClient(base_url=session.get("site_url")) if session and session.get("site_url") else None
 
+    fresh_sections_override = None
+    if req and req.course_html and req.course_html.strip():
+        parser_client = client or MoodleClient(base_url=get_settings().MOODLE_BASE_URL)
+        fresh_sections_override = parser_client.parse_course_page_html(req.course_html)
+
     result = await store.check_and_apply_course_updates(
         course_id=course_id,
         owner_id=owner.owner_id,
         moodle_client=client,
         session=session,
         force=force,
+        fresh_sections_override=fresh_sections_override,
     )
     return result
 

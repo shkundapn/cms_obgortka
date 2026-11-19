@@ -148,8 +148,25 @@
     const status=main.querySelector('[data-course-action-status]')||action.parentElement.querySelector('[role=status]');action.disabled=true;if(status)status.textContent=action.hasAttribute('data-clear-course-generated')?'Очищуємо згенероване…':'Оновлюємо…';
     try {
       const id=bundle.course.course_id;let response;
-      if(action.hasAttribute('data-sync-course'))response=await UI.post(`/api/workspace/courses/${id}/sync-moodle`,{course_title:bundle.course.title,tools_config:bundle.tools_config});
-      else if(action.hasAttribute('data-check-updates')) {response=await UI.post(`/api/workspace/courses/${id}/check-updates?force=true`,{});if(!response.checked)throw new Error(response.error||response.message||'Не вдалося перевірити оновлення.');}
+      if(action.hasAttribute('data-sync-course')) {
+        try {
+          response=await UI.post(`/api/workspace/courses/${id}/sync-moodle`,{course_title:bundle.course.title,tools_config:bundle.tools_config});
+        } catch (syncErr) {
+          if (syncErr.status === 502 && UI.extensionCall) {
+            const extSync = await UI.extensionCall('MOODLE_SYNC_COURSE', { courseId: id, courseTitle: bundle.course.title, shortname: bundle.course.shortname }, 30000);
+            if (!extSync?.success) throw new Error(extSync?.error || syncErr.message);
+            response = extSync.data || { message: 'Курс оновлено через браузер' };
+          } else throw syncErr;
+        }
+      }
+      else if(action.hasAttribute('data-check-updates')) {
+        response=await UI.post(`/api/workspace/courses/${id}/check-updates?force=true`,{});
+        if(!response.checked && response.upstream_blocked && UI.extensionCall) {
+          const extCheck = await UI.extensionCall('MOODLE_CHECK_UPDATES', { courseId: id, force: true }, 15000);
+          if (extCheck?.success && extCheck.data) response = extCheck.data;
+        }
+        if(!response.checked)throw new Error(response.error||response.message||'Не вдалося перевірити оновлення.');
+      }
       else if(action.hasAttribute('data-ack-topic')) {
         if(bundle.course.source_type!=='manual_upload')await UI.post(`/api/workspace/courses/${id}/sync-moodle`,{course_title:bundle.course.title,tools_config:bundle.tools_config});
         response=await UI.post(`/api/workspace/mixes/${encodeURIComponent(action.dataset.ackTopic)}/ack-update`,{});

@@ -124,8 +124,35 @@
       catch (err) { UI.toast(err.message); }
     },
   });
+  const checkedCoursesAt = new Map();
+  function maybeCheckCourseUpdates(courseId) {
+    const id = Number(courseId);
+    if (!id) return;
+    const now = Date.now();
+    if (now - (checkedCoursesAt.get(id) || 0) < 5 * 60 * 1000) return;
+    checkedCoursesAt.set(id, now);
+    UI.api(`/api/workspace/courses/${id}/check-updates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+      .then(data => {
+        if (data?.upstream_blocked && typeof UI.extensionCall === 'function') {
+          return UI.extensionCall('MOODLE_CHECK_UPDATES', { courseId: id }, 15000).then(res => res?.data || null);
+        }
+        return data;
+      })
+      .then(data => {
+        if (data?.has_updates) {
+          UI.toast('Курс оновлено');
+          H.dashboardRefresh?.();
+        }
+      })
+      .catch(() => {});
+  }
   function tools(hash) {
     const course = /^course\/(\d+)\/([^/?]+)/.exec(hash);
+    if (course) maybeCheckCourseUpdates(course[1]);
     const isAnki = hash === 'anki' || hash.startsWith('anki/');
     const isTool = (course && course[2] !== 'overview') || isAnki || ['settings','deadlines','connect','import'].includes(hash);
     const previousTool = lastTool;

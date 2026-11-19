@@ -64,7 +64,7 @@ async fallbackViaExtension(path) {
  if (raw.startsWith('/api/assignments')) {
   const q = raw.includes('?') ? new URLSearchParams(raw.split('?')[1]) : null;
   const courseId = q?.get('course_id') ? Number(q.get('course_id')) : null;
-  const res = await extensionCall('MOODLE_ASSIGNMENTS', { courseId }, 15000);
+  const res = await extensionCall('MOODLE_ASSIGNMENTS', { courseId }, 30000);
   if (res?.success) return { total: res.total ?? res.assignments?.length ?? 0, assignments: res.assignments || [] };
  }
  if (raw.startsWith('/api/grades') && !raw.startsWith('/api/grades/from-browser')) {

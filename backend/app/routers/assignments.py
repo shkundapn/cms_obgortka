@@ -144,7 +144,7 @@ async def get_my_assignments(
         if exc.error_code == "upstream_blocked":
             if not refresh:
                 saved = get_workspace_store().load_assignments(site_url or "", user_id, course_id=course_id)
-                if saved is not None:
+                if saved:
                     return _build_assignment_response(saved, course_id=course_id)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message)
         raise HTTPException(
@@ -154,7 +154,7 @@ async def get_my_assignments(
     except MoodleConnectionError as exc:
         if not refresh:
             saved = get_workspace_store().load_assignments(site_url or "", user_id, course_id=course_id)
-            if saved is not None:
+            if saved:
                 return _build_assignment_response(saved, course_id=course_id)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -163,7 +163,7 @@ async def get_my_assignments(
     except MoodleException as exc:
         if not refresh:
             saved = get_workspace_store().load_assignments(site_url or "", user_id, course_id=course_id)
-            if saved is not None:
+            if saved:
                 return _build_assignment_response(saved, course_id=course_id)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -212,11 +212,12 @@ async def get_my_assignments(
         total=len(assignments_list),
         assignments=assignments_list,
     )
-    cache.set(site_url, user_id, "assignments", resp, key=cache_key, ttl_seconds=300.0)
-    get_workspace_store().save_assignments(
-        site_url or "",
-        user_id,
-        [item.model_dump() for item in resp.assignments],
-        course_id=course_id,
-    )
+    if resp.assignments:
+        cache.set(site_url, user_id, "assignments", resp, key=cache_key, ttl_seconds=300.0)
+        get_workspace_store().save_assignments(
+            site_url or "",
+            user_id,
+            [item.model_dump() for item in resp.assignments],
+            course_id=course_id,
+        )
     return resp

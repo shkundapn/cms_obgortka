@@ -2611,6 +2611,53 @@ class WorkspaceStore:
         storage = get_temp_storage()
         storage.delete_prefix(owner_id, course_id=course_id)
         with self._connect() as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            mix_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT mix_id FROM topic_mixes WHERE owner_id = ? AND course_id = ?",
+                    (owner_id, course_id),
+                ).fetchall()
+            ]
+            if "learning_topic_versions" in tables and mix_ids:
+                placeholders = ",".join("?" for _ in mix_ids)
+                conn.execute(
+                    f"DELETE FROM learning_topic_versions WHERE owner_id = ? AND mix_id IN ({placeholders})",
+                    (owner_id, *mix_ids),
+                )
+            if "course_organization_versions" in tables:
+                conn.execute(
+                    "DELETE FROM course_organization_versions WHERE owner_id = ? AND course_id = ?",
+                    (owner_id, course_id),
+                )
+            if "oral_defense_sessions" in tables:
+                q_ids = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT question_id FROM oral_defense_sessions WHERE owner_id = ? AND course_id = ?",
+                        (owner_id, course_id),
+                    ).fetchall()
+                ]
+                if "oral_defense_nodes" in tables and q_ids:
+                    placeholders = ",".join("?" for _ in q_ids)
+                    conn.execute(
+                        f"DELETE FROM oral_defense_nodes WHERE question_id IN ({placeholders})",
+                        q_ids,
+                    )
+                conn.execute(
+                    "DELETE FROM oral_defense_sessions WHERE owner_id = ? AND course_id = ?",
+                    (owner_id, course_id),
+                )
+            if "oral_defense_attempts" in tables:
+                conn.execute(
+                    "DELETE FROM oral_defense_attempts WHERE owner_id = ? AND course_id = ?",
+                    (owner_id, course_id),
+                )
             conn.execute(
                 "DELETE FROM temp_staging WHERE owner_id = ? AND course_id = ?",
                 (owner_id, course_id),

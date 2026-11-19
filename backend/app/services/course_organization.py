@@ -79,7 +79,10 @@ def material_groups(bundle, organization=None):
     explicit = {mid: t["topic_index"] for t in topics for mid in t.get("material_ids", [])}
     seen = set()
     for idx, section in enumerate(sections):
+        sec_ref_idx = section.get("section_index", section.get("id", idx + 1))
         for mod in section["modules"]:
+            if mod.get("modname") in ("label", "subsection") or mod.get("uservisible") is False:
+                continue
             key = mod["id"] or mod.get("url") or (idx, mod.get("name"))
             if key in seen:
                 continue
@@ -92,7 +95,7 @@ def material_groups(bundle, organization=None):
                     target = -1
                     groups.setdefault(target, {"topic_index": target, "title": "Про курс", "summary": "", "materials": []})
                 else:
-                    target = matcher.find_logical_topic_match(mod, section["name"], idx + 1)
+                    target = matcher.find_logical_topic_match(mod, section["name"], sec_ref_idx)
                     if target is None:
                         text = f'{mod.get("name", "")} {mod.get("description", "")} {section["name"]}'
                         scores = [(matcher.score_topic_by_keywords(text, t), t["topic_index"]) for t in topics]
@@ -107,4 +110,6 @@ def material_groups(bundle, organization=None):
                     "source_section": section["name"], "url": mod.get("url") or metadata.get(mod["id"], {}).get("url"),
                     "description": mod.get("description", ""), "source_type": section.get("source_type", "moodle")}
             groups[target]["materials"].append(item)
+    if topics:
+        return [g for g in groups.values() if g["topic_index"] >= 0 or g["materials"]]
     return list(groups.values())

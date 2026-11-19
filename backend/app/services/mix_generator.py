@@ -783,8 +783,11 @@ async def generate_course_structure_from_syllabus(
     syllabus_found = False
 
     # 0. Live Gemini AI Curriculum Architect
-    from app.services.learning_provider import LearningProviderError
+    from app.services.learning_provider import LearningProviderError, current_provider
+    from app.services.course_update_matcher import CourseUpdateMatcher
+    from app.services.course_structure import section_kind
     gemini = GeminiService(api_key=gemini_api_key)
+    provider = current_provider.get()
     if gemini.is_available:
         try:
             ai_topics = await gemini.structure_syllabus_to_topics(
@@ -794,22 +797,63 @@ async def generate_course_structure_from_syllabus(
                 target_score=target_score,
             )
             if ai_topics and len(ai_topics) > 0:
+                used_indices = set()
+                raw_topics_for_match = []
                 for item in ai_topics:
-                    t_idx = item.get("topic_index", len(topics) + 1)
-                    t_title = item.get("title") or f"Тиждень {t_idx}"
+                    raw_idx = item.get("topic_index")
+                    try:
+                        t_idx = int(raw_idx)
+                    except (TypeError, ValueError):
+                        t_idx = len(topics) + 1
+                    if t_idx <= 0 or t_idx in used_indices:
+                        t_idx = max(used_indices, default=0) + 1
+                    used_indices.add(t_idx)
+                    t_title = str(item.get("title") or "").strip() or f"Тема {t_idx}"
                     concepts = item.get("key_concepts") or [t_title]
                     kws = item.get("keywords") or concepts
+                    raw_topics_for_match.append({
+                        "topic_index": t_idx,
+                        "title": t_title,
+                        "summary": item.get("summary") or f"Огляд теми '{t_title}'.",
+                        "key_concepts": concepts,
+                        "keywords": kws,
+                        "difficulty": item.get("difficulty", "Intermediate"),
+                        "estimated_hours": item.get("estimated_hours", 3),
+                        "suggested_focus": item.get("suggested_focus") or "Опрацювання ключових концепцій",
+                    })
+
+                matched_ids_by_topic: Dict[int, List[int]] = {}
+                if sections and raw_topics_for_match:
+                    filtered_sections = [
+                        {
+                            **sec,
+                            "modules": [
+                                mod for mod in sec.get("modules", [])
+                                if mod.get("modname") not in ("label", "subsection")
+                                and mod.get("safety_status") != "restricted_exam"
+                            ],
+                        }
+                        for sec in sections
+                    ]
+                    matched = CourseUpdateMatcher(raw_topics_for_match).match_all_sections(filtered_sections)
+                    for t_idx, items in matched.get("topic_material_items", {}).items():
+                        matched_ids_by_topic[t_idx] = [m.id for m in items if getattr(m, "id", None)]
+
+                for meta in raw_topics_for_match:
+                    t_idx = meta["topic_index"]
+                    mat_ids = matched_ids_by_topic.get(t_idx, [])
                     topics.append(
                         TopicPreviewItem(
                             topic_index=t_idx,
-                            title=t_title,
-                            summary=item.get("summary") or f"Огляд теми '{t_title}'.",
-                            key_concepts=concepts,
-                            keywords=kws,
-                            difficulty=item.get("difficulty", "Intermediate"),
-                            estimated_hours=item.get("estimated_hours", 3),
-                            source_modules_count=len(concepts),
-                            suggested_focus=item.get("suggested_focus") or "Опрацювання ключових концепцій",
+                            title=meta["title"],
+                            summary=meta["summary"],
+                            key_concepts=meta["key_concepts"],
+                            keywords=meta["keywords"],
+                            material_ids=mat_ids,
+                            difficulty=meta["difficulty"],
+                            estimated_hours=meta["estimated_hours"],
+                            source_modules_count=len(mat_ids),
+                            suggested_focus=meta["suggested_focus"],
                         )
                     )
                 if topics:
@@ -817,10 +861,14 @@ async def generate_course_structure_from_syllabus(
                     syllabus_excerpt = (
                         custom_syllabus_text[:500]
                         if custom_syllabus_text
-                        else f"Згенеровано моделлю Gemini 2.0 Flash на основі матеріалів Moodle ({len(sections or [])} секцій)."
+                        else f"Згенеровано моделлю AI на основі матеріалів курсу ({len(sections or [])} секцій)."
                     )
         except LearningProviderError:
-            raise
+            if provider and provider.source == "personal":
+                raise
+            if not sections and not custom_syllabus_text:
+                raise
+            logger.warning("Server AI syllabus structuring failed; falling back to section clustering.")
         except Exception as exc:
             logger.warning("Gemini syllabus structuring failed (%s)", type(exc).__name__)
 
@@ -834,9 +882,29 @@ async def generate_course_structure_from_syllabus(
             target_score=target_score,
         )
 
+        # Fallback to real non-administrative sections when heuristic concept parsing yields nothing
+        if not canonical_meta_list and sections:
+            curr_idx = 1
+            for sec in sections:
+                sec_name = (sec.get("name") or sec.get("title") or "").strip()
+                real_mods = [
+                    m for m in sec.get("modules", [])
+                    if m.get("modname") not in ("label", "subsection")
+                    and m.get("safety_status") != "restricted_exam"
+                ]
+                if not real_mods or section_kind(sec_name) in ("info", "archive"):
+                    continue
+                clean_title = CurriculumConceptParser.clean_concept_name(sec_name) or sec_name or f"Тема {curr_idx}"
+                canonical_meta_list.append(
+                    CurriculumConceptParser.expand_concept_metadata(
+                        clean_title, topic_index=curr_idx, target_score=target_score
+                    )
+                )
+                curr_idx += 1
+
         clustered_mats = (
             MaterialContentClusterer.cluster_all_materials(sections, canonical_meta_list)
-            if sections
+            if sections and canonical_meta_list
             else {}
         )
 
@@ -845,14 +913,18 @@ async def generate_course_structure_from_syllabus(
             syllabus_excerpt = (
                 custom_syllabus_text[:500]
                 if custom_syllabus_text
-                else f"Автоматично виділено {len(canonical_meta_list)} канонічних тем силабусу з матеріалів Moodle."
+                else f"Автоматично виділено {len(canonical_meta_list)} канонічних тем силабусу з матеріалів курсу."
             )
 
             score_factor = 1.0 if target_score < 75 else (1.4 if target_score < 90 else 1.8)
+            used_indices = set()
             for meta in canonical_meta_list:
-                t_idx = meta["topic_index"]
+                raw_idx = meta.get("topic_index")
+                t_idx = raw_idx if isinstance(raw_idx, int) and raw_idx > 0 and raw_idx not in used_indices else (max(used_indices, default=0) + 1)
+                used_indices.add(t_idx)
                 clean_kws = [kw for kw in meta.get("keywords", []) if kw.lower() not in ADMINISTRATIVE_WORDS]
-                mats = clustered_mats.get(t_idx, [])
+                mats = clustered_mats.get(raw_idx, [])
+                mat_ids = [m.id for m in mats if getattr(m, "id", None)]
                 total_items = max(len(mats), len(meta.get("key_concepts", [])))
                 est_hours = max(2, int(round((total_items * 0.7 + 1.5) * score_factor)))
 
@@ -863,6 +935,7 @@ async def generate_course_structure_from_syllabus(
                         summary=meta["summary"][:250],
                         key_concepts=meta["key_concepts"][:5],
                         keywords=clean_kws,
+                        material_ids=mat_ids,
                         difficulty=meta.get("difficulty", "Intermediate"),
                         estimated_hours=est_hours,
                         source_modules_count=len(mats),

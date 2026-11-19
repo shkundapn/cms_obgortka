@@ -219,6 +219,36 @@ async def preview_course_structure(
     if existing:
         course_title = existing["course"].title
         shortname = existing["course"].shortname
+        if not sections:
+            synthetic = []
+            for idx, snap in enumerate(existing.get("snapshots", []), start=1):
+                if snap.safety_status == "restricted_exam":
+                    continue
+                synthetic.append({
+                    "id": idx,
+                    "section_index": idx,
+                    "name": snap.title or f"Матеріал {idx}",
+                    "summary": (snap.content_text or "")[:400],
+                    "source_type": snap.source_type,
+                    "modules": [{
+                        "id": 900000 + idx,
+                        "name": snap.title or f"Матеріал {idx}",
+                        "modname": "page",
+                        "description": (snap.content_text or "")[:1200],
+                        "safety_status": snap.safety_status,
+                    }],
+                })
+            if not synthetic:
+                for mix in existing.get("topic_mixes", []):
+                    synthetic.append({
+                        "id": mix.topic_index,
+                        "section_index": mix.topic_index,
+                        "name": mix.title,
+                        "summary": mix.summary_markdown[:400] if mix.summary_markdown else "",
+                        "modules": [m.model_dump(mode="json") for m in mix.materials],
+                    })
+            if synthetic:
+                sections = synthetic
     custom_text = req.custom_syllabus_text
 
     # 1. Try pulling real Moodle sections if user has an active session (reusing short TTL cache)
@@ -1240,6 +1270,66 @@ async def submit_mix_quiz_attempt(
     if not res:
         raise HTTPException(status_code=404, detail=f"TopicMix '{mix_id}' not found.")
     return {"success": True, **res}
+
+
+@router.post("/api/workspace/courses/{course_id}/reset")
+async def reset_workspace_course(
+    course_id: int,
+    request: Request,
+    owner: WorkspaceOwner = Depends(get_workspace_owner),
+) -> Dict[str, Any]:
+    """Reset a whole course (all snapshots, chunks, mixes, notes, organization, oral defense, and files).
+
+    If the course is linked to Moodle and the user has an active Moodle session,
+    immediately re-imports a fresh copy from Moodle after wiping local state.
+    """
+    store = get_workspace_store()
+    existing = store.get_course_bundle(course_id, owner_id=owner.owner_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Workspace course {course_id} not found.")
+
+    course = existing["course"]
+    course_title = course.title
+    shortname = course.shortname
+    source_type = course.source_type
+    authority = course.authority
+    tools_cfg = (
+        CourseToolsConfig.model_validate(existing["tools_config"])
+        if existing.get("tools_config")
+        else CourseToolsConfig()
+    )
+
+    store.delete_course(course_id, owner_id=owner.owner_id)
+
+    session = get_optional_moodle_session(request)
+    if source_type != "manual_upload" and session and session.get("moodle_token"):
+        sync_res = await sync_course_from_moodle_backend(
+            course_id=course_id,
+            req=BackendMoodleSyncRequest(
+                course_title=course_title,
+                shortname=shortname,
+                authority=authority,
+                tools_config=tools_cfg,
+            ),
+            session=session,
+            owner=owner,
+        )
+        return {
+            "success": True,
+            "course_id": course_id,
+            "resynced": True,
+            "deleted": False,
+            "message": "Курс повністю скинуто й завантажено заново.",
+            "sync": sync_res,
+        }
+
+    return {
+        "success": True,
+        "course_id": course_id,
+        "resynced": False,
+        "deleted": True,
+        "message": "Курс повністю скинуто й видалено з простору.",
+    }
 
 
 @router.delete("/api/workspace/courses/{course_id}")

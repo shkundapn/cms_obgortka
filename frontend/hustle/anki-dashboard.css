@@ -26,7 +26,8 @@
 @media (prefers-color-scheme: dark) {
   [data-today-anki]:not([data-anki-theme="light"]),
   #workspace-main:not([data-anki-theme="light"]) .anki-page,
-  #workspace-main:not([data-anki-theme="light"]) .anki-study-shell {
+  #workspace-main:not([data-anki-theme="light"]) .anki-study-shell,
+  #study-dialog:not([data-anki-theme="light"]) {
     --anki-bg: #18151d;
     --anki-surface: #211d28;
     --anki-card-front: linear-gradient(145deg, #25202e, #1d1924);
@@ -45,12 +46,19 @@
     --anki-due-bg: #14532d55;
     --anki-due-fg: #86efac;
     --anki-due-bd: #16a34a66;
+    --anki-hard-bg: #78350f66;
+    --anki-hard-fg: #fcd34d;
+    --anki-hard-bd: #d9770666;
+    --anki-good-bg: #0c4a6e66;
+    --anki-good-fg: #7dd3fc;
+    --anki-good-bd: #0284c766;
   }
 }
 
 [data-anki-theme="dark"],
 [data-anki-theme="dark"] .anki-page,
-[data-anki-theme="dark"] .anki-study-shell {
+[data-anki-theme="dark"] .anki-study-shell,
+#study-dialog[data-anki-theme="dark"] {
   --anki-bg: #18151d;
   --anki-surface: #211d28;
   --anki-card-front: linear-gradient(145deg, #25202e, #1d1924);
@@ -69,6 +77,65 @@
   --anki-due-bg: #14532d55;
   --anki-due-fg: #86efac;
   --anki-due-bd: #16a34a66;
+  --anki-hard-bg: #78350f66;
+  --anki-hard-fg: #fcd34d;
+  --anki-hard-bd: #d9770666;
+  --anki-good-bg: #0c4a6e66;
+  --anki-good-fg: #7dd3fc;
+  --anki-good-bd: #0284c766;
+}
+
+/* Ensure crisp button & modal contrast in both light and dark Anki themes */
+.anki-summary-card .text-button,
+.anki-page .text-button,
+.anki-study-shell .text-button,
+.anki-modal-form .text-button {
+  color: var(--anki-accent);
+  background: transparent;
+}
+
+[data-anki-theme="dark"] .anki-summary-card .secondary,
+[data-anki-theme="dark"] .anki-page .secondary,
+[data-anki-theme="dark"] .anki-study-shell .secondary,
+#study-dialog[data-anki-theme="dark"] .secondary {
+  background: var(--anki-surface);
+  color: var(--anki-ink);
+  border-color: var(--anki-border);
+}
+
+[data-anki-theme="dark"] .anki-summary-card .secondary:hover,
+[data-anki-theme="dark"] .anki-page .secondary:hover,
+[data-anki-theme="dark"] .anki-study-shell .secondary:hover,
+#study-dialog[data-anki-theme="dark"] .secondary:hover {
+  background: #2b2535;
+}
+
+#study-dialog[data-anki-theme="dark"] {
+  background: var(--anki-bg);
+  color: var(--anki-ink);
+  border-color: var(--anki-border);
+}
+
+#study-dialog[data-anki-theme="dark"] .dialog-close,
+[data-anki-theme="dark"] .anki-study-shell .icon-button {
+  color: var(--anki-ink);
+  background: var(--anki-surface);
+  border: 1px solid var(--anki-border);
+}
+
+.anki-summary-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--anki-border);
+  background: var(--anki-surface);
+  color: var(--anki-ink);
+  font-size: .82rem;
+  cursor: pointer;
 }
 
 .today-anki {
@@ -130,9 +197,9 @@
   border-radius: 999px;
   font-size: .75rem;
   font-weight: 750;
-  background: #fef3c7;
-  color: #92400e;
-  border: 1px solid #fde68a;
+  background: var(--anki-hard-bg, #fef3c7);
+  color: var(--anki-hard-fg, #92400e);
+  border: 1px solid var(--anki-hard-bd, #fde68a);
   font-variant-numeric: tabular-nums;
 }
 
@@ -185,8 +252,8 @@
 .anki-pill.is-new { background: var(--anki-new-bg); color: var(--anki-new-fg); border-color: var(--anki-new-bd); }
 .anki-pill.is-learning { background: var(--anki-learn-bg); color: var(--anki-learn-fg); border-color: var(--anki-learn-bd); }
 .anki-pill.is-due { background: var(--anki-due-bg); color: var(--anki-due-fg); border-color: var(--anki-due-bd); }
-.anki-pill.is-hard { background: #fef3c7; color: #92400e; border-color: #fde68a; }
-.anki-pill.is-good { background: #e0f2fe; color: #0369a1; border-color: #bae6fd; }
+.anki-pill.is-hard { background: var(--anki-hard-bg, #fef3c7); color: var(--anki-hard-fg, #92400e); border-color: var(--anki-hard-bd, #fde68a); }
+.anki-pill.is-good { background: var(--anki-good-bg, #e0f2fe); color: var(--anki-good-fg, #0369a1); border-color: var(--anki-good-bd, #bae6fd); }
 
 .anki-summary-meta {
   margin: 0;
@@ -216,6 +283,8 @@
 
 /* 2. Course Overview Page (#anki) */
 .anki-page {
+  box-sizing: border-box;
+  width: 100%;
   color: var(--anki-ink);
   max-width: 76rem;
   margin: 0 auto;
@@ -227,6 +296,7 @@
   background: var(--anki-bg);
   border: 1px solid var(--anki-border);
   box-shadow: var(--anki-shadow);
+  overflow-x: hidden;
 }
 
 .anki-page-topbar {
@@ -388,6 +458,8 @@
 
 /* 3. Distraction-Free Study Interface + 3D Flip Animation */
 .anki-study-shell {
+  box-sizing: border-box;
+  width: 100%;
   color: var(--anki-ink);
   background: var(--anki-bg);
   border: 1px solid var(--anki-border);
@@ -400,6 +472,7 @@
   flex-direction: column;
   gap: 1.25rem;
   min-height: min(82svh, 46rem);
+  overflow-x: hidden;
 }
 
 .anki-study-topbar {
@@ -470,6 +543,10 @@
   background: var(--anki-card-front);
 }
 
+.anki-flip-card:not(.is-flipped) .anki-card-front {
+  cursor: pointer;
+}
+
 .anki-card-back {
   background: var(--anki-card-back);
   transform: rotateY(180deg);
@@ -505,8 +582,17 @@
   color: #f3edf8;
   padding: .85rem 1rem;
   border-radius: .65rem;
+  border: 1px solid var(--anki-border);
   overflow-x: auto;
   font-size: .86rem;
+  line-height: 1.5;
+}
+
+.anki-face-content :not(pre) > code {
+  background: rgb(120 100 130 / 14%);
+  padding: .1rem .35rem;
+  border-radius: .3rem;
+  font-size: .9em;
 }
 
 .anki-face-content code {
@@ -597,10 +683,28 @@
   opacity: .75;
 }
 
-.anki-rate-btn.again { background: #ffe4e6; border-color: #fecdd3; color: #9f1239; }
-.anki-rate-btn.hard  { background: #fef3c7; border-color: #fde68a; color: #92400e; }
-.anki-rate-btn.good  { background: #e0f2fe; border-color: #bae6fd; color: #075985; }
-.anki-rate-btn.easy  { background: #dcfce7; border-color: #bbf7d0; color: #166534; }
+.anki-rate-btn.again { background: var(--anki-learn-bg, #ffe4e6); border-color: var(--anki-learn-bd, #fecdd3); color: var(--anki-learn-fg, #9f1239); }
+.anki-rate-btn.hard  { background: var(--anki-hard-bg, #fef3c7); border-color: var(--anki-hard-bd, #fde68a); color: var(--anki-hard-fg, #92400e); }
+.anki-rate-btn.good  { background: var(--anki-good-bg, #e0f2fe); border-color: var(--anki-good-bd, #bae6fd); color: var(--anki-good-fg, #075985); }
+.anki-rate-btn.easy  { background: var(--anki-due-bg, #dcfce7); border-color: var(--anki-due-bd, #bbf7d0); color: var(--anki-due-fg, #166534); }
+
+[data-anki-theme="dark"] .anki-streak-pill {
+  background: var(--anki-hard-bg, #78350f66);
+  color: var(--anki-hard-fg, #fcd34d);
+  border-color: var(--anki-hard-bd, #d9770666);
+}
+
+[data-anki-theme="dark"] .anki-pill.is-hard {
+  background: var(--anki-hard-bg);
+  color: var(--anki-hard-fg);
+  border-color: var(--anki-hard-bd);
+}
+
+[data-anki-theme="dark"] .anki-pill.is-good {
+  background: var(--anki-good-bg);
+  color: var(--anki-good-fg);
+  border-color: var(--anki-good-bd);
+}
 
 .anki-study-complete {
   flex: 1;

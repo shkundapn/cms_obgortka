@@ -321,14 +321,10 @@
   }
   function studyShortcuts(course) {
     const route = '#course/' + encodeURIComponent(course.id);
-    return `<nav class="study-shortcuts" aria-label="Практика предмета">
-      <a class="study-shortcut study-shortcut--cards" href="${route}/cards">
-        <span class="study-shortcut-icon" aria-hidden="true">${icon('courses')}</span>
-        <strong>Картки</strong><span class="study-shortcut-arrow" aria-hidden="true">${icon('arrow')}</span>
-      </a>
-      <a class="study-shortcut study-shortcut--quiz" href="${route}/quizzes">
-        <span class="study-shortcut-icon" aria-hidden="true">${icon('practice')}</span>
-        <strong>Самоперевірка</strong><span class="study-shortcut-arrow" aria-hidden="true">${icon('arrow')}</span>
+    return `<nav class="study-shortcuts" aria-label="Швидкі дії предмета">
+      <a class="study-shortcut study-shortcut--materials" href="${route}/materials">
+        <span class="study-shortcut-icon" aria-hidden="true">${icon('files')}</span>
+        <strong>Матеріали курсу</strong><span class="study-shortcut-arrow" aria-hidden="true">${icon('arrow')}</span>
       </a>
       <button type="button" class="study-shortcut study-shortcut--oral" data-paper-oral="${esc(course.id)}">
         <span class="study-shortcut-icon" aria-hidden="true">${icon('speech')}</span>
@@ -358,7 +354,7 @@
             </div>
             ${deadlineList(list, !course, { limit: 3, showDetails: Boolean(course) })}
           </section>
-          ${course ? window.HustleTopicCards?.overview(course.id) || '' : (window.HustleAnki ? '<section class="today-anki" data-today-anki aria-label="Картки інтервального повторення Anki"></section>' : '')}
+          ${window.HustleAnki ? `<section class="today-anki" data-today-anki${course ? ` data-anki-course="${esc(course.id)}"` : ''} aria-label="Картки інтервального повторення Anki"></section>` : ''}
         </div>
         <aside class="dashboard-aside">
           ${showJourney ? '' : activity}

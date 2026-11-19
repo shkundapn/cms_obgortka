@@ -218,7 +218,7 @@ async def paper_workspace(request: Request, response: Response):
         '<script defer src="/hustle/oral-defense.js?v=20261119-oral-setup"></script>'
         '<script defer src="oral-practice.js?v=20261119-album"></script>'
         '<script defer src="/hustle/vendor/srs-engine.js?v=20261119b"></script>'
-        '<script defer src="/hustle/anki-dashboard.js?v=20261119-donkey-hunt"></script>'
+        '<script defer src="/hustle/anki-dashboard.js?v=20261119-course-overview"></script>'
         '<link rel="stylesheet" href="/prototype/rewards.css?v=20261119-donkey-hunt">'
         '<script defer src="/prototype/rewards.js?v=20261119-donkey-hunt"></script>'
     )

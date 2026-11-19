@@ -142,7 +142,7 @@
       </section>
 
       <div data-cal-grid role="region" aria-live="polite">
-        <p class="muted" role="status">Завантажуємо календар…</p>
+        ${window.HustleProgress ? window.HustleProgress.renderStaticLoading('Завантажуємо календар…') : '<p class="muted" role="status">Завантажуємо календар…</p>'}
       </div>
     </div>`;
   }
@@ -470,21 +470,41 @@
     }
     if (t.closest('[data-cal-sync-now]')) {
       const btn = t.closest('[data-cal-sync-now]'); btn.disabled = true;
+      const fb = state.root.querySelector('[data-cal-ai-feedback]');
+      if (fb) fb.hidden = false;
+      const syncTracker = fb && window.HustleProgress?.mount(fb, {
+        title: 'Синхронізуємо календар…',
+        stages: ['Отримуємо події з підключених календарів', 'Оновлюємо розклад тижня'],
+        expectedSec: 8,
+        compact: true,
+        append: true,
+      });
       try {
         const res = await UI.post('/api/calendar/sync', {});
+        syncTracker?.setStage(1);
         UI.toast(res.warnings?.length ? 'Синхронізовано з попередженнями' : 'Календар синхронізовано');
         await loadOverview();
-      } catch (err) { UI.toast(err.message); }
+        syncTracker?.stop({remove: true});
+        if (fb && !fb.children.length) fb.hidden = true;
+      } catch (err) { syncTracker?.fail(err.message); UI.toast(err.message); }
       finally { btn.disabled = false; }
       return;
     }
     if (t.closest('[data-cal-auto-week]')) {
       const btn = t.closest('[data-cal-auto-week]'); btn.disabled = true;
+      const fb = state.root.querySelector('[data-cal-ai-feedback]');
+      if (fb) fb.hidden = false;
+      const aiTracker = fb && window.HustleProgress?.mount(fb, {
+        title: 'Складаємо навчальний план на тиждень…',
+        stages: ['Перевіряємо вільні вікна, сон і заборонений час', 'Розставляємо сесії навчання перед дедлайнами', 'Синхронізуємо з календарем'],
+        expectedSec: 12,
+      });
       try {
         const res = await UI.post('/api/calendar/ai/plan', {prompt: '', days: 7, sync_external: true});
+        aiTracker?.stop({remove: true});
         showAiResult(res);
         await loadOverview();
-      } catch (err) { UI.toast(err.message); }
+      } catch (err) { aiTracker?.fail(err.message); UI.toast(err.message); }
       finally { btn.disabled = false; }
       return;
     }
@@ -562,18 +582,33 @@
       const prompt = form.elements.prompt.value.trim();
       const btn = form.querySelector('[type="submit"]');
       btn.disabled = true;
+      const fb = state.root.querySelector('[data-cal-ai-feedback]');
+      if (fb) fb.hidden = false;
+      const aiTracker = fb && window.HustleProgress?.mount(fb, {
+        title: 'AI-планувальник підбирає час…',
+        stages: ['Аналізуємо запит і дедлайни', 'Шукаємо вільні слоти без конфліктів', 'Додаємо події в календар'],
+        expectedSec: 10,
+      });
       try {
         const res = await UI.post('/api/calendar/ai/plan', {prompt, days: 7, sync_external: true});
+        aiTracker?.stop({remove: true});
         showAiResult(res);
         form.elements.prompt.value = '';
         await loadOverview();
-      } catch (err) { UI.toast(err.message); }
+      } catch (err) { aiTracker?.fail(err.message); UI.toast(err.message); }
       finally { btn.disabled = false; }
       return;
     }
     if (form.matches('[data-cal-quick-form]')) {
       event.preventDefault();
       const btn = form.querySelector('[type="submit"]'); btn.disabled = true;
+      const fb = state.root.querySelector('[data-cal-ai-feedback]');
+      if (fb) fb.hidden = false;
+      const qTracker = fb && window.HustleProgress?.mount(fb, {
+        title: 'Шукаємо найближче вільне вікно…',
+        expectedSec: 5,
+        compact: true,
+      });
       try {
         const res = await UI.post('/api/calendar/ai/schedule-block', {
           course_id: Number(form.elements.course_id.value),
@@ -581,9 +616,10 @@
           preferred_part_of_day: form.elements.part.value || null,
           horizon_days: 7,
         });
+        qTracker?.stop({remove: true});
         showAiResult({assistant_message: 'Додано в найближче вільне вікно:', scheduled: [res.event], unscheduled: []});
         await loadOverview();
-      } catch (err) { UI.toast(err.message); }
+      } catch (err) { qTracker?.fail(err.message); UI.toast(err.message); }
       finally { btn.disabled = false; }
       return;
     }

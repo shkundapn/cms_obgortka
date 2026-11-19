@@ -649,7 +649,7 @@
             ].filter(Boolean).join(' ');
             return `<span class="${cls}" data-od-word="${idx}">${esc(w.word)}</span>`;
           }).join(' ')
-        : `<span class="muted">Готуємо запитання з матеріалів лекції…</span>`;
+        : `<div data-od-question-progress><span class="muted">Готуємо запитання з матеріалів лекції…</span></div>`;
 
       bodyContent = `
         <div class="od-stage">
@@ -713,6 +713,8 @@
               </div>
             ` : ''}
 
+            ${isEval ? '<div data-od-eval-progress></div>' : ''}
+
             ${state.micNotice ? `<p class="field-error" role="alert" style="margin:0;">${esc(state.micNotice)}</p>` : ''}
 
             ${state.pendingAudio && state.phase === 'question_ready' ? '<button class="secondary" data-od-resubmit>Повторити перевірку запису</button>' : ''}
@@ -751,6 +753,30 @@
         ${bodyContent}
       </div>
     `;
+    state.progressTracker?.stop();
+    state.progressTracker = null;
+    if (window.HustleProgress) {
+      if (state.phase === 'loading_question') {
+        const slot = body.querySelector('[data-od-question-progress]');
+        if (slot) {
+          state.progressTracker = window.HustleProgress.mount(slot, {
+            title: 'Формулюємо запитання…',
+            stages: ['Аналізуємо конспект теми', 'Добираємо запитання потрібного рівня'],
+            expectedSec: 8,
+            compact: true,
+          });
+        }
+      } else if (state.phase === 'evaluating') {
+        const slot = body.querySelector('[data-od-eval-progress]');
+        if (slot) {
+          state.progressTracker = window.HustleProgress.mount(slot, {
+            title: 'AI-екзаменатор аналізує відповідь…',
+            stages: ['Опрацьовуємо твою відповідь', 'Звіряємо з конспектом теми', 'Готуємо детальний розбір'],
+            expectedSec: 12,
+          });
+        }
+      }
+    }
   }
 
   function open(opts) {

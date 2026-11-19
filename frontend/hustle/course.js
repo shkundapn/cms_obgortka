@@ -11,10 +11,15 @@
     return `<div class="manage-grid"><section class="topic-card"><h2>Інструменти курсу</h2><form id="course-tools"><div class="tool-grid">${controls(value.tools_config)}</div><button class="primary" type="submit">Зберегти</button><p role="status" data-tools-status></p></form></section><section class="topic-card"><h2>Матеріали й структура</h2><div class="manage-actions"><button class="secondary" data-structure>Впорядкувати за темами ${icon('arrow')}</button>${value.course.source_type!=='manual_upload'?'<button class="secondary" data-sync-course>Оновити з Moodle ↻</button><button class="text-button" data-check-updates>Перевірити зміни</button>':''}<button class="secondary" data-regenerate>Оновити конспекти ↻</button><button class="text-button" data-clear-course-generated>Очистити згенероване</button><button class="text-button danger-button" data-reset-course>Скинути весь курс</button></div><p role="status" data-course-action-status></p><div data-jobs></div></section></div>${value.blocked_quizzes.length?`<details class="source-tree"><summary>Недоступні для опрацювання · ${value.blocked_quizzes.length}</summary><ul>${value.blocked_quizzes.map(q=>`<li>${esc(q.name)}</li>`).join('')}</ul></details>`:''}`;
   }
   async function jobs(target,epoch) {
-    try {const result=await UI.api(`/api/workspace/courses/${bundle.course.course_id}/jobs`);if(epoch!==version||!target.isConnected)return;
+    try {const result=await UI.api(`/api/workspace/courses/${bundle.course.course_id}/jobs`,{_silent:true});if(epoch!==version||!target.isConnected)return;
       const values=Array.isArray(result.jobs)?result.jobs:Object.values(result.jobs||{});
-      const states={debouncing:'Підготовку заплановано',running:'Готуємо матеріали…',completed:'Матеріали готові',failed:'Не вдалося підготувати матеріали'};
-      target.innerHTML=values.map(job=>`<p class="job-status" role="status">${esc(states[job.status]||job.status)}${job.status==='failed'?'<button class="text-button" data-regenerate>Повторити</button>':''}</p>`).join('');
+      const states={debouncing:'Підготовку заплановано — незабаром почнеться',running:'Компілюємо матеріали курсу…',completed:'Матеріали готові',failed:'Не вдалося підготувати матеріали'};
+      target.innerHTML=values.map(job=>{
+        if(['debouncing','running'].includes(job.status) && window.HustleProgress) {
+          return window.HustleProgress.renderStaticLoading(states[job.status], 'Можна продовжувати роботу — сторінка оновиться після завершення.');
+        }
+        return `<p class="job-status" role="status">${esc(states[job.status]||job.status)}${job.status==='failed'?'<button class="text-button" data-regenerate>Повторити</button>':''}</p>`;
+      }).join('');
       if(values.some(job=>['debouncing','running'].includes(job.status)))jobTimer=setTimeout(()=>jobs(target,epoch),5000);
     }catch{if(target.isConnected)target.innerHTML='<p class="muted">Стан генерації недоступний.</p>';}
   }
@@ -24,7 +29,12 @@
     if(section==='assignments'&&window.HustleSpace)return HustleSpace.deadlines(target,courseId,profile);
     if(!profile.moodle_paired){target.innerHTML='<section class="connected-empty"><h2>Підключи Moodle</h2><a class="primary" href="connect.html">Підключити LMS →</a></section>';return;}
     const selected=courseId?`?course_id=${encodeURIComponent(courseId)}`:'';
-    target.innerHTML='<p role="status">Завантажуємо…</p>';
+    const acadTracker = window.HustleProgress?.mount(target, {
+      title: section === 'grades' ? 'Завантажуємо оцінки з Moodle…' : 'Завантажуємо дедлайни з Moodle…',
+      expectedSec: 5,
+      compact: true,
+    });
+    if (!acadTracker) target.innerHTML='<p role="status">Завантажуємо…</p>';
     try {
       if(section==='grades') {
         const data=await UI.api('/api/grades'+selected);if(!target.isConnected)return;
@@ -91,9 +101,18 @@
     error.textContent = '';
     const originalText = btn.textContent;
     btn.textContent = mode === 'resync' ? 'Скидаємо й оновлюємо…' : 'Видаляємо курс…';
+    let resetSlot = body.querySelector('[data-reset-progress]');
+    if (!resetSlot) { resetSlot = document.createElement('div'); resetSlot.setAttribute('data-reset-progress', ''); error.before(resetSlot); }
+    const resetTracker = window.HustleProgress?.mount(resetSlot, {
+      title: mode === 'resync' ? 'Скидаємо й завантажуємо курс заново…' : 'Видаляємо дані курсу…',
+      stages: mode === 'resync' ? ['Очищуємо старі дані й кеш', 'Синхронізуємо свіжі матеріали з Moodle'] : [],
+      expectedSec: mode === 'resync' ? 14 : 4,
+      compact: true,
+    });
     try {
       if (mode === 'resync') {
         const res = await UI.post(`/api/workspace/courses/${id}/reset`, {});
+        resetTracker?.stop({remove: true});
         if (!dialog.open || modalVersion !== epoch) return;
         clearCourseReadingState(id);
         dialog.close();
@@ -106,6 +125,7 @@
         }
       } else {
         await UI.api(`/api/workspace/courses/${id}`, { method: 'DELETE' });
+        resetTracker?.stop({remove: true});
         if (!dialog.open || modalVersion !== epoch) return;
         clearCourseReadingState(id);
         dialog.close();
@@ -113,6 +133,7 @@
         location.hash = 'courses';
       }
     } catch (err) {
+      resetTracker?.stop({remove: true});
       error.textContent = err.message;
       btn.textContent = originalText;
       buttons.forEach(el => { el.disabled = false; });
@@ -121,20 +142,26 @@
   body.addEventListener('submit',async event=>{
     if(event.target.id!=='structure-request'&&event.target.id!=='structure-confirm')return;event.preventDefault();const form=event.target, button=form.querySelector('[type=submit]'),error=body.querySelector('[data-course-error]');button.disabled=true;error.textContent='';
     const epoch=modalVersion;
+    let structSlot = form.querySelector('[data-struct-progress]');
+    if (!structSlot) { structSlot = document.createElement('div'); structSlot.setAttribute('data-struct-progress', ''); form.append(structSlot); }
+    const structTracker = window.HustleProgress?.mount(structSlot, form.id === 'structure-request'
+      ? { title: 'Аналізуємо структуру курсу…', stages: ['Зчитуємо список матеріалів і силабус', 'Групуємо матеріали за темами', 'Формуємо план курсу'], expectedSec: 16, compact: true }
+      : { title: 'Застосовуємо нову структуру…', expectedSec: 8, compact: true });
     try {
       if(form.id==='structure-request') {
         button.textContent='Визначаємо теми…';
         const payload={course_id:bundle.course.course_id,title:bundle.course.title,authority:bundle.course.authority,target_score:Number(form.elements.target.value),custom_syllabus_text:form.elements.syllabus?.value.trim()||null,tools_config:bundle.tools_config};
         preview=await UI.post('/api/workspace/courses/preview-structure',payload);
+        structTracker?.stop({remove: true});
         if(!dialog.open||modalVersion!==epoch)return;
         if(!preview.topics?.length)throw new Error('Не вдалося визначити теми. Додай силабус.');
         showDialog('Структура матеріалів',`<form id="structure-confirm" class="import-form"><ol class="structure-preview">${preview.topics.map((t,i)=>{const count=t.material_ids?.length||t.source_modules_count||0;return `<li><label>Тема ${i+1}${count?` · ${UI.countLabel(count,'матеріал','матеріали','матеріалів')}`:''}<input data-topic-title="${i}" value="${esc(t.title)}" required maxlength="220"></label><p>${esc(t.summary)}</p>${t.key_concepts?.length?`<div class="concept-tags">${t.key_concepts.map(c=>`<span>${esc(c)}</span>`).join('')}</div>`:''}</li>`;}).join('')}</ol><button class="primary" type="submit">Застосувати структуру →</button></form>`);
       } else {
         button.textContent='Застосовуємо…';
         const topics=preview.topics.map((t,i)=>({...t,title:form.querySelector(`[data-topic-title="${i}"]`).value.trim()}));
-        await UI.post('/api/workspace/courses/confirm-structure',{...preview,topics});dialog.close();UI.toast('Матеріали впорядковано');const url=UI.courseLink(bundle.course.course_id,'materials');if(location.hash===url)emit();else location.hash=url;
+        await UI.post('/api/workspace/courses/confirm-structure',{...preview,topics});structTracker?.stop({remove: true});dialog.close();UI.toast('Матеріали впорядковано');const url=UI.courseLink(bundle.course.course_id,'materials');if(location.hash===url)emit();else location.hash=url;
       }
-    }catch(err){error.textContent=err.message;button.textContent=form.id==='structure-request'?'Переглянути структуру →':'Застосувати структуру →';}finally{button.disabled=false;}
+    }catch(err){structTracker?.stop({remove: true});error.textContent=err.message;button.textContent=form.id==='structure-request'?'Переглянути структуру →':'Застосувати структуру →';}finally{button.disabled=false;}
   });
   main.addEventListener('submit',async event=>{
     if(event.target.id!=='course-tools')return;event.preventDefault();const form=event.target,status=form.querySelector('[data-tools-status]'),button=form.querySelector('[type=submit]');button.disabled=true;status.textContent='Оновлюємо інструменти…';
@@ -145,7 +172,18 @@
     if(event.target.closest('[data-structure]')){structure();return;}
     if(event.target.closest('[data-reset-course]')){resetCourseModal();return;}
     const action=event.target.closest('[data-sync-course],[data-check-updates],[data-regenerate],[data-ack-topic],[data-clear-course-generated]');if(!action)return;
-    const status=main.querySelector('[data-course-action-status]')||action.parentElement.querySelector('[role=status]');action.disabled=true;if(status)status.textContent=action.hasAttribute('data-clear-course-generated')?'Очищуємо згенероване…':'Оновлюємо…';
+    const status=main.querySelector('[data-course-action-status]')||action.parentElement.querySelector('[role=status]');action.disabled=true;
+    const actionConfig = action.hasAttribute('data-sync-course')
+      ? { title: 'Оновлюємо курс із Moodle…', stages: ['Зчитуємо список модулів і файлів із Moodle', 'Оновлюємо локальний простір курсу'], expectedSec: 12 }
+      : action.hasAttribute('data-check-updates')
+      ? { title: 'Перевіряємо зміни в Moodle…', expectedSec: 6, compact: true }
+      : action.hasAttribute('data-ack-topic')
+      ? { title: 'Оновлюємо конспект теми…', stages: ['Завантажуємо оновлені матеріали', 'Перекомпілюємо конспект і практику'], expectedSec: 22 }
+      : action.hasAttribute('data-clear-course-generated')
+      ? { title: 'Очищуємо згенеровані матеріали…', expectedSec: 5, compact: true }
+      : { title: 'Оновлюємо конспекти курсу…', stages: ['Зчитуємо матеріали тем', 'Генеруємо оновлені конспекти та практику'], expectedSec: 26 };
+    const actionTracker = status && window.HustleProgress?.mount(status, actionConfig);
+    if (!actionTracker && status) status.textContent = actionConfig.title;
     try {
       const id=bundle.course.course_id;let response;
       if(action.hasAttribute('data-sync-course')) {
@@ -169,6 +207,7 @@
       }
       else if(action.hasAttribute('data-ack-topic')) {
         if(bundle.course.source_type!=='manual_upload')await UI.post(`/api/workspace/courses/${id}/sync-moodle`,{course_title:bundle.course.title,tools_config:bundle.tools_config});
+        actionTracker?.setStage(1);
         response=await UI.post(`/api/workspace/mixes/${encodeURIComponent(action.dataset.ackTopic)}/ack-update`,{});
       }
       else if(action.hasAttribute('data-clear-course-generated')) {
@@ -176,8 +215,9 @@
         response={message:'Згенеровані матеріали курсу очищено'};
       }
       else response=await UI.post(`/api/workspace/courses/${id}/generate`,{});
+      actionTracker?.complete(response.message||'Матеріали оновлено');
       UI.toast(response.message||'Матеріали оновлено');emit();
-    }catch(err){if(status)status.textContent=err.message;else UI.toast(err.message);}finally{action.disabled=false;}
+    }catch(err){actionTracker?.fail(err.message);if(!actionTracker && status)status.textContent=err.message;else if(!status) UI.toast(err.message);}finally{action.disabled=false;}
   });
   main.addEventListener('toggle',async event=>{
     const panel=event.target;if(!panel.matches('[data-source-files]')||!panel.open||panel.dataset.loaded)return;

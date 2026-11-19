@@ -248,20 +248,30 @@
   }
 
   function status(state, message = '', isError = false) {
+    state.progressTracker?.stop();
+    state.progressTracker = null;
     state.notice.textContent = isError ? '' : message;
     state.error.textContent = isError ? message : '';
   }
 
-  async function act(state, button, task, pendingMessage) {
+  async function act(state, button, task, pendingMessage, progressConfig = null) {
     if (state.pending) return;
     state.pending = true;
     button.setAttribute('aria-disabled', 'true');
-    status(state, pendingMessage);
+    if (progressConfig && window.HustleProgress && state.notice) {
+      state.error.textContent = '';
+      state.progressTracker?.stop();
+      state.progressTracker = window.HustleProgress.mount(state.notice, progressConfig);
+    } else {
+      status(state, pendingMessage);
+    }
     try {
       await task();
     } catch (error) {
       status(state, error.message, true);
     } finally {
+      state.progressTracker?.stop({remove: true});
+      state.progressTracker = null;
       state.pending = false;
       button.removeAttribute('aria-disabled');
     }
@@ -365,15 +375,27 @@
           status(state);
         }, 'Оновлюємо набір…');
       } else if (button.hasAttribute('data-deck-generate')) {
-        act(state, button, () => saveItems(state, '', {}), 'Генеруємо з матеріалів теми…');
+        const quiz = isQuiz(state);
+        act(state, button, () => saveItems(state, '', {}), 'Генеруємо з матеріалів теми…', {
+          title: quiz ? 'Генеруємо запитання для самоперевірки…' : 'Генеруємо картки повторення…',
+          stages: [
+            'Зчитуємо матеріали обраної теми',
+            quiz ? 'Формулюємо тестові запитання та пояснення' : 'Виділяємо ключові поняття та відповіді',
+            'Зберігаємо та оновлюємо набір',
+          ],
+          expectedSec: 16,
+        });
       }
     });
   }
 
   function view(bundle, mode = 'cards') {
+    const loader = window.HustleProgress
+      ? window.HustleProgress.renderStaticLoading(mode === 'quizzes' ? 'Завантажуємо самоперевірку…' : 'Завантажуємо набори карток…')
+      : '<p class="muted" role="status">Завантажуємо набори…</p>';
     return '<div class="topic-decks" data-topic-decks="' + mode + '" data-course="' + esc(bundle.course.course_id)
-      + '"><div data-deck-content><p class="muted" role="status">Завантажуємо набори…</p></div>'
-      + '<p class="topic-deck-notice" data-deck-notice role="status"></p>'
+      + '"><div data-deck-content>' + loader + '</div>'
+      + '<div class="topic-deck-notice" data-deck-notice role="status"></div>'
       + '<p class="field-error topic-deck-notice" data-deck-error role="alert"></p></div>';
   }
 

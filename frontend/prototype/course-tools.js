@@ -12,7 +12,7 @@
     if (parent.location.hash !== route) parent.location.hash = route;
   }
   function placeMaterialsAction(main) {
-    const action = frame.previousElementSibling?.querySelector('[data-paper-add-materials]');
+    const action = frame.closest('#workspace-main')?.querySelector('[data-paper-add-materials]');
     if (!action) return;
     const internalAction = () => main.querySelector('.course-cover [data-add]');
     const sync = () => { action.disabled = main.inert || !internalAction(); };

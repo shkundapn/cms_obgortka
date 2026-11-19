@@ -65,8 +65,13 @@
     main.dataset.view=route.courseId?'course':active;
     document.querySelectorAll('[data-nav]').forEach(a=>a.setAttribute('aria-current',a.dataset.nav===active?'page':'false'));
     document.querySelector('#view-name').textContent=nav.find(([key])=>key===active)?.[1] || 'Курси';
-    main.setAttribute('aria-busy','true');main.inert=true;
-    if(!main.children.length || navigate)main.innerHTML='<div class="loading-state" role="status">Завантажуємо…</div>';
+    const showLoading = !main.children.length || navigate;
+    main.setAttribute('aria-busy','true');main.inert=!showLoading;
+    if(showLoading){
+      main.innerHTML = window.HustleProgress
+        ? `<div class="loading-state">${window.HustleProgress.renderStaticLoading('Завантажуємо простір…')}</div>`
+        : '<div class="loading-state" role="status">Завантажуємо…</div>';
+    }
     try {
       account=await UI.api('/api/auth/status'); if(turn!==generation)return;
       const name=account.fullname || account.email || account.moodle_username || 'Гість';
@@ -137,9 +142,12 @@
   let batch = null;
   function renderImportPill() {
     importPill.hidden = !batch || (dialog.open && body.contains(picker.element)) || (!batch.running && !batch.failures.size);
-    if (batch) importPill.textContent = batch.running
-      ? `Додаємо курси · ${batch.done.size}/${batch.chosen.length}`
-      : `Не додано курсів: ${batch.failures.size} ↻`;
+    if (batch) {
+      const pct = batch.chosen.length ? Math.round((batch.done.size / batch.chosen.length) * 100) : 0;
+      importPill.textContent = batch.running
+        ? `Додаємо курси · ${batch.done.size}/${batch.chosen.length} (${pct}%)`
+        : `Не додано курсів: ${batch.failures.size} ↻`;
+    }
   }
   const picker = createMoodlePicker({
     courseListUrl,
@@ -177,16 +185,36 @@
     const tools=state.bundle?.tools_config || {flashcards:form.elements.cards.checked,practice_quizzes:form.elements.quiz.checked};
     setBusy(true);button.disabled=true;error.hidden=true;let errors=[];
     const fields=[...form.querySelectorAll('input,textarea')];fields.forEach(el=>el.disabled=true);
+    const totalSteps = files.length + ((content || youtube) ? 1 : 0);
+    const resultsSlot = form.querySelector('[data-upload-results]');
+    const fileKeys = files.map(file => `${file.name}|${file.size}|${file.lastModified}`);
+    let doneSteps = fileKeys.filter(key => state.completed.has(key)).length + Number(Boolean(content || youtube) && state.textDone);
+    const uploadTracker = window.HustleProgress?.mount(resultsSlot, {
+      title: youtube && !files.length ? 'Опрацьовуємо YouTube-лекцію…' : 'Завантажуємо та опрацьовуємо матеріали…',
+      stages: youtube && !files.length ? ['Отримуємо відео та субтитри', 'Структуруємо матеріал лекції', 'Зберігаємо в курс'] : [],
+      total: files.length ? totalSteps : 0,
+      completed: doneSteps,
+      expectedSec: youtube && !files.length ? 22 : 0,
+      perItemSec: youtube ? 14 : 6,
+      compact: true,
+    });
     for(let i=0;i<files.length;i++) {
-      const fileKey=`${files[i].name}|${files[i].size}|${files[i].lastModified}`;
+      const fileKey = fileKeys[i];
       if(state.completed.has(fileKey))continue;
-      form.querySelector('[data-upload-results]').textContent=`Завантажуємо ${i+1} із ${files.length}: ${files[i].name}`;
+      if(uploadTracker) uploadTracker.setItemProgress(doneSteps, totalSteps, `Файл ${i+1} із ${files.length}: ${files[i].name}`);
+      else resultsSlot.textContent=`Завантажуємо ${i+1} із ${files.length}: ${files[i].name}`;
       const data=new FormData();data.append('file',files[i]);data.append('course_title',title);data.append('tools_json',JSON.stringify(tools));if(state.courseId)data.append('course_id',state.courseId);if(state.bundle)data.append('authority',state.bundle.course.authority);
-      try {const result=await UI.api('/api/workspace/courses/upload',{method:'POST',body:data});state.courseId=result.course_id;state.completed.add(fileKey);} catch(err){errors.push(`${files[i].name}: ${err.message}`);}
+      try {const result=await UI.api('/api/workspace/courses/upload',{method:'POST',body:data});state.courseId=result.course_id;state.completed.add(fileKey);doneSteps++;uploadTracker?.setItemProgress(doneSteps, totalSteps);} catch(err){errors.push(`${files[i].name}: ${err.message}`);}
     }
-    if((content||youtube)&&!state.textDone)try {if(youtube)form.querySelector('[data-upload-results]').textContent='Опрацьовуємо YouTube-відео…';const result=await UI.post('/api/workspace/courses/create-text',{title,topic_title:form.elements.topic.value.trim()||(youtube?title:'')||title,content_text:content,youtube_url:youtube||null,course_id:state.courseId,authority:state.bundle?.course.authority||'custom',tools_config:tools});state.courseId=result.course_id;state.textDone=true;}catch(err){errors.push(err.message);}
+    if((content||youtube)&&!state.textDone)try {
+      const detail = youtube ? 'Аналізуємо YouTube-відео та формуємо розділи…' : 'Індексуємо текст лекції…';
+      if(uploadTracker) uploadTracker.update({detail});
+      else if(youtube) resultsSlot.textContent='Опрацьовуємо YouTube-відео…';
+      const result=await UI.post('/api/workspace/courses/create-text',{title,topic_title:form.elements.topic.value.trim()||(youtube?title:'')||title,content_text:content,youtube_url:youtube||null,course_id:state.courseId,authority:state.bundle?.course.authority||'custom',tools_config:tools});state.courseId=result.course_id;state.textDone=true;doneSteps++;uploadTracker?.setItemProgress(doneSteps, totalSteps);
+    }catch(err){errors.push(err.message);}
     setBusy(false);button.disabled=false;fields.forEach(el=>el.disabled=false);
-    if(errors.length){form.querySelector('[data-upload-results]').textContent=`Додано: ${state.completed.size+(state.textDone?1:0)}`;button.textContent='Повторити невдалі';fail(new Error(errors.join('\n')));return;}
+    if(errors.length){uploadTracker?.stop({remove:true});resultsSlot.textContent=`Додано: ${state.completed.size+(state.textDone?1:0)}`;button.textContent='Повторити невдалі';fail(new Error(errors.join('\n')));return;}
+    uploadTracker?.complete('Матеріали додано');
     dialog.close();const target=UI.courseLink(state.courseId,'materials');if(location.hash===target)render();else location.hash=target;
   });
   importPill.onclick = showConnect;

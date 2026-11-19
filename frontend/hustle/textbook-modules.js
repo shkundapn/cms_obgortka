@@ -2,6 +2,7 @@
 (() => {
   const { escape: esc, icon } = UI;
   const progressCache = new Map();
+  const inlineQuizOptionOrders = new WeakMap();
   const inlineQuizSelections = new Map(); // `${courseId}:${topicIndex}:${moduleId}:${qIdx}` -> optionIdx
   const inlineQuizResults = new Map(); // `${courseId}:${topicIndex}:${moduleId}` -> server response
   const inlineTutorResults = new Map(); // `${courseId}:${topicIndex}:${moduleId}` -> server response
@@ -256,11 +257,14 @@
                   const selKey = `${qCacheKey}:${qIdx}`;
                   const chosen = inlineQuizSelections.has(selKey) ? inlineQuizSelections.get(selKey) : null;
                   const resItem = savedQuizRes?.results?.[qIdx];
+                  const options = q.options || [];
+                  const optionOrder = inlineQuizOptionOrders.get(options) ?? window.HustleStudy.shuffledOptionIndices(options);
+                  inlineQuizOptionOrders.set(options, optionOrder);
                   return `
                     <div class="tm-quiz-item" data-tm-q-idx="${qIdx}">
                       <strong style="font-size:.95rem;">${qIdx + 1}. ${math(q.question)}</strong>
                       <div class="tm-quiz-opts">
-                        ${(q.options || []).map((opt, optIdx) => {
+                        ${optionOrder.map(optIdx => {
                           let cls = 'tm-quiz-opt';
                           if (resItem) {
                             if (optIdx === q.correct_index) cls += ' is-right';
@@ -269,7 +273,7 @@
                           return `
                             <label class="${cls}">
                               <input type="radio" name="tm-q-${esc(moduleId)}-${qIdx}" value="${optIdx}" data-tm-quiz-opt="${qIdx}" ${chosen === optIdx ? 'checked' : ''}>
-                              <span>${math(opt)}</span>
+                              <span>${math(options[optIdx])}</span>
                             </label>
                           `;
                         }).join('')}

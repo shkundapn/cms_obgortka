@@ -34,8 +34,15 @@
 .reward-panel { padding: clamp(1rem, 2vw, 1.65rem); background: linear-gradient(120deg, #f2e7f6, #fffdf7 66%); }
 .reward-journey { display: grid; grid-template-columns: minmax(14rem, .7fr) minmax(0, 1.4fr); gap: clamp(1rem, 2.3vw, 2rem); }
 .reward-journey-progress h2 { margin: 0 0 .45rem; font-size: clamp(1.1rem, 2vw, 1.35rem); font-weight: 800; letter-spacing: -.035em; }
-.reward-journey-actions { min-width: 0; padding-inline-start: clamp(.85rem, 2vw, 1.7rem); border-inline-start: 1px solid #e6d9e7; }
+.reward-journey-actions, .reward-journey-activity { min-width: 0; padding-inline-start: clamp(.85rem, 2vw, 1.7rem); border-inline-start: 1px solid #e6d9e7; }
 .reward-journey-actions h3 { margin: 0 0 .65rem; color: #422947; font-size: 1rem; font-weight: 800; letter-spacing: -.018em; }
+.reward-journey-activity .panel-title { flex-wrap: wrap; gap: .3rem .75rem; margin-bottom: .9rem; }
+.reward-journey-activity h3 { margin: 0; color: #422947; font-size: clamp(1rem, 1.6vw, 1.18rem); font-weight: 800; letter-spacing: -.025em; }
+.reward-journey-activity .activity-chart { padding-inline: 0; }
+.reward-journey-activity .activity-column { color: #705a73; font-size: .75rem; }
+.reward-journey-activity .bar-value { font-size: inherit; font-weight: 700; font-variant-numeric: tabular-nums; }
+.reward-journey-activity .bar-track { width: min(100%, 3rem); height: clamp(4.25rem, 9vw, 6.5rem); background: #eee7f1; }
+.reward-journey-activity .chart-note { margin-top: .9rem; color: #705a73; font-size: .72rem; }
 .reward-level-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
 .reward-level-name { display: block; margin: 0 0 .35rem; color: #6f4c7b; font-size: .875rem; font-weight: 800; }
 .reward-level-head strong { display: block; color: #3d2543; font-size: 1.65rem; line-height: 1; font-weight: 800; letter-spacing: -.045em; }
@@ -147,7 +154,7 @@
   .reward-product-copy { padding: .7rem; }
   .reward-wallet { min-height: 2.75rem; }
   .reward-journey { grid-template-columns: minmax(0, 1fr); }
-  .reward-journey-actions { padding: .9rem 0 0; border: 0; border-top: 1px solid #e6d9e7; }
+  .reward-journey-actions, .reward-journey-activity { padding: .9rem 0 0; border: 0; border-top: 1px solid #e6d9e7; }
 }
 @media (max-width: 25rem) {
   .reward-wallet span { display: none; }

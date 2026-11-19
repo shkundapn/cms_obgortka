@@ -339,8 +339,8 @@
 
   function drawQuests(panel, data) {
     const model = routes.get(panel);
-    if (!model) return;
     const host = panel.querySelector('[data-reward-quests]');
+    if (!model || !host) return;
     const focused = host.contains(document.activeElement) && document.activeElement.closest('[data-reward-quest]')?.dataset.rewardQuest;
     host.innerHTML = routeMarkup(model, data);
     if (focused) host.querySelector(`[data-reward-quest="${focused}"] a`)?.focus({ preventScroll: true });
@@ -403,14 +403,19 @@
       const data = read();
       document.querySelectorAll('[data-rewards-panel]').forEach((panel) => drawQuests(panel, data));
     },
-    panel(course) { return `<section class="reward-panel reward-journey" data-rewards-panel data-reward-course="${esc(course || '')}" aria-labelledby="reward-journey-title"><div class="reward-journey-progress"><h2 id="reward-journey-title">Навчальний маршрут</h2><div data-reward-progress></div></div><div class="reward-journey-actions" data-reward-quests></div></section>`; },
+    panel(course, activity = '') {
+      return `<section class="reward-panel reward-journey" data-rewards-panel data-reward-course="${esc(course || '')}" aria-labelledby="reward-journey-title">
+        <div class="reward-journey-progress"><h2 id="reward-journey-title">Навчальний маршрут</h2><div data-reward-progress></div></div>
+        ${activity || '<div class="reward-journey-actions" data-reward-quests></div>'}
+      </section>`;
+    },
     preferred(courses, fallback) { const id = read().recent?.course; return courses.some((course) => course.id === id) ? id : fallback; },
     mount(root, tasks = []) {
       const panel = root.querySelector('[data-rewards-panel]');
       if (panel && !routes.has(panel)) {
         const course = panel.dataset.rewardCourse;
         routes.set(panel, { course, tasks });
-        if (course) loadRoute(panel);
+        if (course && panel.querySelector('[data-reward-quests]')) loadRoute(panel);
         trackDeadlines(tasks);
       }
       refresh();

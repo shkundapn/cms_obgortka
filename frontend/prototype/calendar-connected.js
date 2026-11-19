@@ -26,7 +26,8 @@
   const label = ev => ev.created_by === 'moodle' ? 'Дедлайн Moodle' : ({google:'Google Calendar', ics:'iCal', ai_study:'Навчання', manual:'Моя подія'})[ev.source_type] || 'Подія';
   const editable = ev => ['ai_study', 'manual'].includes(ev.source_type);
   const refresh = () => H.dashboardRefresh?.();
-  const pending = () => calendar?.deadlines.filter(d => d.review === 'pending') || [];
+  const isRecentDeadline = d => !d?.due_at || dayOf(d.due_at) >= core.addDays(dayOf(Date.now()), -1);
+  const pending = () => calendar?.deadlines.filter(d => d.review === 'pending' && isRecentDeadline(d)) || [];
   function session(revalidate = false) {
     // Other tabs can import a course. Serialize the first request that issues a guest cookie.
     if (sessionRequest) return sessionRequest;
@@ -233,7 +234,7 @@
     return `<button class="calendar-agenda-event deadline-surface" data-live-mark data-kind="${esc(eventKind(ev))}" data-cal-event="${esc(ev.event_id)}" ${dragAttrs(ev)}><span class="calendar-event-time">${startLabel(ev, context.day)}${end}</span><span class="calendar-event-marker lavender"></span><span class="calendar-agenda-copy"><strong>${esc(ev.title)}</strong><small>${esc(label(ev))}</small></span>${icon('arrow')}${due ? window.HustleDeadlineVisuals.edge(Date.parse(due), ev.status === 'done') : ''}</button>`;
   }
   function review() {
-    const list = [...(calendar?.deadlines || [])].sort((a,b) => a.duedate - b.duedate);
+    const list = [...(calendar?.deadlines || [])].filter(isRecentDeadline).sort((a,b) => a.duedate - b.duedate);
     const rows = list.map(d => {
       const key = `${Number(d.course_id)}/${Number(d.id)}`;
       return `<article class="sync-event"><div class="sync-event-copy"><strong>${esc(d.name)}</strong><span>${esc(d.course_name)}</span><time>${esc(UI.date(d.due_at,true))}</time></div><div class="sync-event-actions">${d.review === 'accepted' ? '<span class="sync-status accepted">У календарі</span>' : `<button class="sync-decision sync-yes" data-review-key="${key}" data-choice="accepted" aria-label="Додати: ${esc(d.name)}">${icon('check')}</button>${d.review === 'pending' ? `<button class="sync-decision sync-no" data-review-key="${key}" data-choice="declined" aria-label="Відхилити: ${esc(d.name)}">${icon('close')}</button>` : '<span class="sync-status">Пропущено</span>'}`}</div></article>`;

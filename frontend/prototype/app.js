@@ -20,14 +20,18 @@
     const avatars = ['owl', 'cat', 'book', 'coffee', 'backpack', 'pencil'];
     let seed = 0;
     for (const letter of name) seed = (Math.imul(seed, 31) + letter.codePointAt(0)) >>> 0;
-    const avatar = avatars[seed % avatars.length];
+    const reward = window.HustleRewards?.activeAvatar();
+    const avatar = reward?.id || avatars[seed % avatars.length];
+    const avatarSrc = reward ? `assets/mascot/${reward.pose}.webp` : `avatars/${avatar}.svg`;
     document.querySelectorAll('[data-name]').forEach(el => el.textContent = name);
     document.querySelectorAll('[data-initial]').forEach(el => {
       if (el.dataset.avatar === avatar) return;
       el.dataset.avatar = avatar;
-      el.innerHTML = `<img src="avatars/${avatar}.svg" alt="" width="36" height="36">`;
+      el.dataset.rewardTone = reward?.tone || '';
+      el.innerHTML = `<img src="${avatarSrc}" alt="" width="36" height="36">`;
     });
   }
+  H.refreshProfile = profile;
   document.querySelector('#workspace-nav').innerHTML=nav.filter(([key])=>key!=='materials' && (key!=='practice' || !H.workspace)).map(([key,label,svg])=>`<a href="#${key}" data-nav="${key}">${icon(svg)}<span>${label}</span></a>`).join('');
   document.querySelector('#menu-toggle').innerHTML=icon('menu');document.querySelector('[data-close-dialog]').innerHTML=icon('close');
   function planView(){

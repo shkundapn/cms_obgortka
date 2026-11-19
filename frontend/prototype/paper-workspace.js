@@ -197,7 +197,13 @@
       (restoreStudyFocus ? ' data-focus-study-tab' : '') +
       (currentCourse ? ' data-shared-course-header' : '') + ' src="' + esc(src) + '" allow="microphone"></iframe>';
     if (hash === 'settings') window.HustleDashboard.renderSettings('general', goal + frame);
-    else main.innerHTML = header + frame;
+    else {
+      const section = course?.[2];
+      const found = ['reading', 'topic'].includes(section) ? 'notes'
+        : ['topics', 'materials', 'files'].includes(section) ? 'search' : '';
+      const sticker = found && window.HustleRewards?.marker(found);
+      main.innerHTML = header + (sticker ? `<div class="reward-course-find">${sticker}</div>` : '') + frame;
+    }
     return true;
   }
   const courseSections = {overview: 'Огляд', topics: 'Теми', practice: 'Практика', assignments: 'Дедлайни', manage: 'Параметри'};

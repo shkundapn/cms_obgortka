@@ -4,6 +4,7 @@
   const dialog = document.querySelector('#study-dialog');
   const body = document.querySelector('#dialog-body');
   const drafts = new Map();
+  const rewardStore = () => (window.frameElement ? window.parent : window).HustleRewards;
   let activeBundle, practice, viewVersion = 0;
   const tabs = [['overview','Карта курсу'],['materials','Матеріали'],['practice','Практика'],['assignments','Дедлайни']];
   const studyModes = [['practice','За темами'],['cards','Картки'],['quizzes','Самоперевірка'],['exam','До іспиту']];
@@ -146,7 +147,7 @@
     const verified = window.HustleCurriculum?HustleCurriculum.practiceTopics(activeBundle).find(t=>t.mix_id===mixId):topic;
     const items = selectedItems ?? (type==='exam'?activeBundle.exam_mix?.mock_exam_questions:type==='cards'?verified?.flashcards:verified?.quizzes);
     if(!items?.length) return;
-    practice = {type,items,topic,index:0,score:0,selected:null,checked:false,revealed:false,saving:false,error:'',epoch:++viewVersion};
+    practice = {type,items,topic,courseId:activeBundle.course.course_id,index:0,score:0,selected:null,checked:false,revealed:false,saving:false,error:'',epoch:++viewVersion};
     drawPractice(); focusPractice(); dialog.showModal(); focusPractice();
   }
   function focusPractice() {
@@ -156,17 +157,38 @@
   }
   function drawPractice() {
     const p=practice;
+    const rewards = rewardStore();
     if(p.index>=p.items.length) {
       const returnLabel = UI.route().section === 'quizzes' ? 'До теми' : UI.route().view === 'dashboard' ? 'До плану' : 'До курсу';
-      body.innerHTML=`<div class="practice-summary"><span class="mascot-sticker mascot-sticker--complete" aria-hidden="true"><img src="/prototype/assets/mascot/complete.webp" alt="" width="384" height="384"></span><h2 id="dialog-title">${p.type==='cards'?'Картки повторено':`${p.score} із ${p.items.length} правильних`}</h2><button class="primary" data-study-close>${returnLabel} →</button></div>`;
+      const passed = p.type === 'quiz' && p.score >= Math.ceil(p.items.length * 2 / 3);
+      const sticker = passed ? rewards?.marker('quiz', 'mascot-sticker mascot-sticker--complete') : '';
+      body.innerHTML=`<div class="practice-summary">${sticker || '<span class="mascot-sticker mascot-sticker--complete" aria-hidden="true"><img src="/prototype/assets/mascot/complete.webp" alt="" width="384" height="384"></span>'}<h2 id="dialog-title">${p.type==='cards'?'Картки повторено':`${p.score} із ${p.items.length} правильних`}</h2><button class="primary" data-study-close>${returnLabel} →</button></div>`;
+      if (passed) {
+        const summary = body.querySelector('.practice-summary');
+        if (rewards && !p.rewardSaved) {
+          p.rewardSaved = true;
+          const result = document.createElement('p');
+          result.className = 'reward-exercise-result';
+          result.role = 'status';
+          summary.querySelector('h2').after(result);
+          rewards.earn('quiz', p.courseId, p.topic.topic_index).then(award => {
+            result.textContent = rewards.awardText(award);
+          }).catch(() => {
+            result.textContent = 'Відповіді збережено. Не вдалося зберегти XP.';
+          });
+        }
+      }
       return;
     }
     const item=p.items[p.index],math=value=>UI.inlineMath?UI.inlineMath(value):esc(value);
     const explanation = item.explanation || item.options?.[item.correct_index];
-    const correction = p.type === 'quiz' && p.checked && p.selected !== item.correct_index
-      ? `<span class="mascot-sticker mascot-sticker--quiz-correction" aria-hidden="true">
+    let correction = p.type === 'quiz' && p.checked
+      ? rewards?.marker('quiz-correction', 'mascot-sticker mascot-sticker--quiz-correction') || '' : '';
+    if (!correction && p.type === 'quiz' && p.checked && p.selected !== item.correct_index) {
+      correction = `<span class="mascot-sticker mascot-sticker--quiz-correction" aria-hidden="true">
         <img src="/prototype/assets/mascot/quiz-correction.webp" alt="" width="352" height="374" decoding="async">
-      </span>` : '';
+      </span>`;
+    }
     const citation = item.source_citation ? `<div class="topic-card-source">Джерело · ${esc(item.source_citation)}</div>` : '';
     const isLearnedCard=p.type==='cards'&&(p.learnedSet?.has(p.index)||window.HustleAnki?.isLearnedSync?.(item.front,activeBundle?.course?.course_id,p.topic.topic_index));
     body.innerHTML=`<div class="study-position"><span>${p.index+1} / ${p.items.length}</span><div><i style="width:${(p.index+1)/p.items.length*100}%"></i></div></div><h2 id="dialog-title">${math(p.type==='cards'?item.front:item.question)}</h2>${p.type==='cards'?`<div class="flashcard">${p.revealed?`<p>${math(item.back)}</p>`:'<button class="secondary" data-reveal>Показати відповідь</button>'}</div><div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.75rem;"><button type="button" class="secondary" data-mark-anki-learned>${isLearnedCard?'✓ Вивчена (у Anki)':'○ Позначити як вивчену (в Anki)'}</button>${p.revealed?'<button class="primary" style="flex:1;" data-next>Далі →</button>':''}</div>`:`<div class="quiz-options">${item.options.map((option,i)=>`<button class="quiz-option ${p.checked && i===item.correct_index?'correct':p.checked && i===p.selected?'incorrect':''}" data-option="${i}" aria-pressed="${i===p.selected}" ${p.checked||p.saving?'disabled':''}><span>${i+1}</span>${math(option)}</button>`).join('')}</div>${p.checked?`<div class="answer-block">${math(explanation)}${citation}${correction}</div><button class="primary wide" data-next>${p.index===p.items.length-1?'Результат':'Далі →'}</button>`:`<button class="primary wide" data-check ${p.selected===null||p.saving?'disabled':''}>${p.saving?'Зберігаємо…':'Перевірити'}</button>`}`}<p role="alert" class="field-error">${esc(p.error)}</p>`;
@@ -206,6 +228,8 @@
     finally { build.disabled=false; }
   });
   body.addEventListener('click',async event=>{
+    const sticker=event.target.closest('[data-reward-find]');
+    if(sticker) { await rewardStore()?.find(sticker); return; }
     const transcript=event.target.closest('[data-transcript]');
     if(transcript) {
       const material=materialRecords[Number(transcript.dataset.transcript)], target=body.querySelector('[data-transcript-content]');

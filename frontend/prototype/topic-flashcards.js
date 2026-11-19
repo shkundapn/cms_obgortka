@@ -1,6 +1,7 @@
 /* Topic decks and quizzes in the course practice workspace. */
 (() => {
   const {escape: esc, icon} = UI;
+  const rewards = () => (window.frameElement ? window.parent : window).HustleRewards;
 
   const drafts = (window.frameElement && window.parent.HustleTopicCards?.drafts) || new Map();
   const setLink = (courseId, mode, topic) => UI.courseLink(courseId, mode, topic?.topic_index);
@@ -142,9 +143,9 @@
     return `<div class="topic-set-empty">
       <h3>Квіз за темою</h3>
       <button type="button" class="primary" data-quiz-start>Почати квіз ${icon('arrow')}</button>
-      <span class="mascot-sticker mascot-sticker--quiz-start" aria-hidden="true">
+      ${rewards()?.marker('quiz-start', 'mascot-sticker mascot-sticker--quiz-start') || `<span class="mascot-sticker mascot-sticker--quiz-start" aria-hidden="true">
         <img src="/prototype/assets/mascot/quiz-start.webp" alt="" width="448" height="402" decoding="async">
-      </span>
+      </span>`}
     </div>`;
   }
 
@@ -172,9 +173,14 @@
     }
     const progress = `Картка ${state.index + 1} з ${state.queue.length}`;
     const showReviewSticker = !state.index && !state.revealed && due > 0 && !state.session.practice_all;
-    const flipSticker = !state.index && state.revealed ? `<span class="mascot-sticker mascot-sticker--flashcard-flip" aria-hidden="true">
-      <img src="/prototype/assets/mascot/flashcard-flip.webp" alt="" width="320" height="418" decoding="async">
-    </span>` : '';
+    const flipSticker = !state.index && state.revealed
+      ? rewards()?.marker('flashcard-flip', 'mascot-sticker mascot-sticker--flashcard-flip') || `<span class="mascot-sticker mascot-sticker--flashcard-flip" aria-hidden="true">
+        <img src="/prototype/assets/mascot/flashcard-flip.webp" alt="" width="320" height="418" decoding="async">
+      </span>` : '';
+    const reviewSticker = showReviewSticker
+      ? rewards()?.marker('review-due', 'mascot-sticker mascot-sticker--review-due') || `<span class="mascot-sticker mascot-sticker--review-due" aria-hidden="true">
+        <img src="/prototype/assets/mascot/review-due.webp" alt="" width="416" height="276" decoding="async">
+      </span>` : '';
     const answer = state.revealed ? `<div class="topic-card-answer" data-deck-answer tabindex="-1">
       ${UI.inlineMath(card.back)}
       ${card.source_citation ? `<div class="topic-card-source">Джерело · ${esc(card.source_citation)}</div>` : ''}${flipSticker}
@@ -183,9 +189,7 @@
     return `<article class="topic-review-card">
       <div class="topic-review-position"><span>${progress}</span>
         <progress aria-label="${progress}" value="${state.index + 1}" max="${state.queue.length}"></progress></div>
-      ${showReviewSticker ? `<span class="mascot-sticker mascot-sticker--review-due" aria-hidden="true">
-        <img src="/prototype/assets/mascot/review-due.webp" alt="" width="416" height="276" decoding="async">
-      </span>` : ''}
+      ${reviewSticker}
       <h3 class="topic-card-question" data-deck-question tabindex="-1">${UI.inlineMath(card.front)}</h3>
       ${answer}
     </article>`;
@@ -324,6 +328,7 @@
     state.host.addEventListener('click', event => {
       const button = event.target.closest('button');
       if (!button || state.pending) return;
+      if (button.dataset.rewardFind) { rewards()?.find(button); return; }
       if (button.hasAttribute('data-deck-create') || button.hasAttribute('data-deck-cancel')) {
         state.creating = button.hasAttribute('data-deck-create');
         status(state);
@@ -343,6 +348,15 @@
           state.revealed = false;
           draw(state, state.queue[state.index] ? '[data-deck-question]' : '[data-deck-complete]');
           status(state, 'Повторення цієї картки через ' + response.next_review_in + '.');
+          if (state.index === state.queue.length) {
+            const rewardStore = rewards();
+            try {
+              const award = await rewardStore?.earn('cards', state.courseId, state.topicIndex);
+              if (award && state.host.isConnected) status(state, rewardStore.awardText(award));
+            } catch {
+              if (state.host.isConnected) status(state, 'Повторення збережено. Не вдалося зберегти XP.', true);
+            }
+          }
         }, 'Зберігаємо оцінку…');
       } else if (button.hasAttribute('data-deck-mode')) {
         act(state, button, async () => {

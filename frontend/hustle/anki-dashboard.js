@@ -229,6 +229,7 @@
           <a class="anki-text-action anki-dashboard-empty-link" href="#anki" data-anki-open-overview>Усі колоди ${icon('arrow')}</a>`}
       </article>
     `;
+    window.HustleRewards?.setAnkiQueue(review.queue, reviewedToday);
   }
 
   // ==========================================================================
@@ -533,6 +534,25 @@
       studyState.busy = false;
       renderStudyView(activePageHost, lastSession, '#anki-question-label');
       if (activeDashboardHost?.isConnected) drawDashboardWidget(activeDashboardHost, lastSession);
+      if (studyState.complete) {
+        const rewards = window.frameElement ? window.parent.HustleRewards : window.HustleRewards;
+        const title = activePageHost?.querySelector('.anki-study-complete h1');
+        if (rewards && title) {
+          const topics = new Set(studyState.queue.map(item => `${item.courseId ?? item.course_id}/${item.topicIndex ?? item.topic_index}`));
+          const result = document.createElement('p');
+          result.className = 'reward-exercise-result';
+          result.role = 'status';
+          title.after(result);
+          Promise.all([...topics].map(key => {
+            const [course, topic] = key.split('/');
+            return Number(course) > 0 ? rewards.earn('cards', course, topic) : null;
+          })).then(awards => {
+            const xp = awards.reduce((sum, award) => sum + (award?.xp || 0), 0);
+            const points = awards.reduce((sum, award) => sum + (award?.points || 0), 0);
+            result.textContent = xp ? rewards.awardText({ xp, points, level: awards.filter(award => award?.level).at(-1)?.level }) : '';
+          }).catch(() => { result.textContent = 'Сесію збережено. Не вдалося зберегти XP.'; });
+        }
+      }
     } catch (err) {
       studyState.busy = false;
       UI.toast?.(err.message);

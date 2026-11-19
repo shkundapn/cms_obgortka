@@ -289,7 +289,12 @@
     if (document.hidden || checkingAccount || Date.now() - verifiedAt < 1000) return;
     checkingAccount = true;
     try {
-      const current = await UI.api('/api/auth/status');
+      let current = await UI.api('/api/auth/status');
+      if (current.owner_id === account.owner && !current.moodle_paired && (account.paired || current.moodle_url)) {
+        if (await UI.refreshSession?.(current.moodle_url || account.moodle)) {
+          current = await UI.api('/api/auth/status');
+        }
+      }
       if (current.owner_id !== account.owner || current.moodle_paired !== account.paired) {
         location.reload();
         return;

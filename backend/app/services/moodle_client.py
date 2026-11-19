@@ -212,6 +212,12 @@ class MoodleClient:
                     error_code="invalid_cookie"
                 )
 
+        if res.status_code == 403:
+            raise MoodleAuthError(
+                f"Moodle ({base_url}) blocked the server request with HTTP 403.",
+                error_code="upstream_blocked"
+            )
+
         if res.status_code != 200:
             raise MoodleAuthError(
                 f"Moodle returned HTTP {res.status_code} when validating cookie. Please check the cookie value.",

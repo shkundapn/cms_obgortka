@@ -316,12 +316,106 @@ def create_session_jwt(payload_data: Dict[str, Any], settings: Optional[Settings
     if settings is None:
         settings = get_settings()
 
-    to_encode = payload_data.copy()
+    to_encode = {k: v for k, v in payload_data.items() if k not in {"exp", "iat", "nbf"}}
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
 
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
+
+
+def should_refresh_jwt(payload: Dict[str, Any], ttl_minutes: int) -> bool:
+    """Return True when a valid JWT is past half of its configured lifetime."""
+    exp = payload.get("exp")
+    if exp is None:
+        return True
+    try:
+        remaining = float(exp) - datetime.now(timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return True
+    return 0 < remaining < (max(1, int(ttl_minutes)) * 60) / 2
+
+
+def refresh_session_cookies(
+    request: Request,
+    response: Response,
+    settings: Optional[Settings] = None,
+    *,
+    force: bool = False,
+) -> Dict[str, bool]:
+    """Perform sliding-window renewal for active HttpOnly session cookies."""
+    if settings is None:
+        settings = get_settings()
+    refreshed = {"moodle": False, "platform": False, "workspace": False}
+
+    raw_moodle = request.cookies.get(settings.COOKIE_NAME)
+    if raw_moodle:
+        try:
+            claims = decode_session_jwt(raw_moodle, settings)
+            if "moodle_token" in claims and (force or should_refresh_jwt(claims, settings.ACCESS_TOKEN_EXPIRE_MINUTES)):
+                new_jwt = create_session_jwt(claims, settings)
+                response.set_cookie(
+                    key=settings.COOKIE_NAME,
+                    value=new_jwt,
+                    max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                    httponly=True,
+                    secure=settings.COOKIE_SECURE,
+                    samesite=settings.COOKIE_SAMESITE,
+                    path="/",
+                )
+                refreshed["moodle"] = True
+        except UnauthorizedError:
+            pass
+
+    raw_platform = request.cookies.get(settings.PLATFORM_COOKIE_NAME)
+    if raw_platform:
+        claims = decode_platform_jwt(raw_platform, settings)
+        if claims and (force or should_refresh_jwt(claims, settings.WORKSPACE_TOKEN_EXPIRE_MINUTES)):
+            new_platform = create_platform_jwt(
+                owner_id=claims["owner_id"],
+                google_sub=claims["google_sub"],
+                email=claims["email"],
+                fullname=claims["fullname"],
+                picture_url=claims.get("picture_url"),
+                settings=settings,
+            )
+            response.set_cookie(
+                key=settings.PLATFORM_COOKIE_NAME,
+                value=new_platform,
+                max_age=settings.WORKSPACE_TOKEN_EXPIRE_MINUTES * 60,
+                httponly=True,
+                secure=settings.COOKIE_SECURE,
+                samesite=settings.COOKIE_SAMESITE,
+                path="/",
+            )
+            refreshed["platform"] = True
+
+    raw_ws = request.cookies.get(settings.WORKSPACE_COOKIE_NAME)
+    if raw_ws:
+        try:
+            ws_claims = decode_session_jwt(raw_ws, settings)
+            owner_id = ws_claims.get("workspace_owner_id")
+            if (
+                ws_claims.get("token_type") == "workspace"
+                and isinstance(owner_id, str)
+                and owner_id.startswith(("ws:", "moodle:", "google:"))
+                and (force or should_refresh_jwt(ws_claims, settings.WORKSPACE_TOKEN_EXPIRE_MINUTES))
+            ):
+                new_ws = create_workspace_jwt(owner_id, settings)
+                response.set_cookie(
+                    key=settings.WORKSPACE_COOKIE_NAME,
+                    value=new_ws,
+                    max_age=settings.WORKSPACE_TOKEN_EXPIRE_MINUTES * 60,
+                    httponly=True,
+                    secure=settings.COOKIE_SECURE,
+                    samesite=settings.COOKIE_SAMESITE,
+                    path="/",
+                )
+                refreshed["workspace"] = True
+        except UnauthorizedError:
+            pass
+
+    return refreshed
 
 
 def decode_session_jwt(token: str, settings: Optional[Settings] = None) -> Dict[str, Any]:

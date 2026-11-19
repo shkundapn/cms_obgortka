@@ -50,7 +50,9 @@
     {
       "matches": [
         "http://127.0.0.1:8000/hustle/*",
-        "http://localhost:8000/hustle/*"
+        "http://127.0.0.1:8000/prototype/*",
+        "http://localhost:8000/hustle/*",
+        "http://localhost:8000/prototype/*"
       ],
       "js": [
         "hustle-bridge.js"

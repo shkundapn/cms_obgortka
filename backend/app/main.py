@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.routers import hustle_extension
 from app.core.exceptions import MoodleException, UnauthorizedError
+from app.core.security import refresh_session_cookies
 from app.core.authorities import get_authority, list_authorities
 from app.routers import auth, courses, assignments, grades, system, events, authorities, workspace, calendar
 from app.services.build_queue import get_build_queue
@@ -52,6 +53,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+_AUTH_SELF_ISSUING_PATHS = {
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/refresh",
+    "/api/auth/extension-pair",
+    "/api/auth/google/login",
+    "/api/auth/google/callback",
+    "/api/auth/google/dev-login",
+}
+
+
+@app.middleware("http")
+async def sliding_session_refresh_middleware(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if (
+        (path.startswith("/api/") or path in {"/prototype/app.html", "/hustle/tools.html"})
+        and path not in _AUTH_SELF_ISSUING_PATHS
+        and response.status_code < 500
+    ):
+        refresh_session_cookies(request, response)
+    return response
 
 # Global Exception Handlers
 @app.exception_handler(MoodleException)

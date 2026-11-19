@@ -19,6 +19,7 @@ from app.core.security import (
     decode_session_jwt,
     get_current_user_session,
     get_optional_platform_session,
+    refresh_session_cookies,
     resolve_workspace_owner,
     validate_moodle_target_url,
 )
@@ -198,14 +199,33 @@ async def logout(request: Request, response: Response):
     response.delete_cookie(
         key=settings.COOKIE_NAME,
         path="/",
+        secure=settings.COOKIE_SECURE,
         samesite=settings.COOKIE_SAMESITE,
     )
     response.delete_cookie(
         key=settings.PLATFORM_COOKIE_NAME,
         path="/",
+        secure=settings.COOKIE_SECURE,
         samesite=settings.COOKIE_SAMESITE,
     )
     return {"success": True, "message": "Logged out successfully."}
+
+
+@router.post("/refresh")
+async def refresh_auth_session(request: Request, response: Response) -> Dict[str, Any]:
+    """Refresh active HttpOnly session cookies (moodle_session, platform_session, workspace_session)."""
+    settings = get_settings()
+    refreshed = refresh_session_cookies(request, response, settings, force=True)
+    response.headers["Cache-Control"] = "no-store"
+    platform_claims = get_optional_platform_session(request, settings)
+    return {
+        "success": True,
+        "refreshed": any(refreshed.values()),
+        "cookies": refreshed,
+        "moodle_paired": refreshed["moodle"],
+        "google_linked": bool(platform_claims or refreshed["platform"]),
+        "needs_reconnect": not refreshed["moodle"],
+    }
 
 
 def _clean_user_email(addr: Optional[str]) -> Optional[str]:
@@ -550,6 +570,11 @@ async def extension_pair_moodle_cookie(
             target_moodle_url=target_url,
         )
     except MoodleAuthError as exc:
+        if exc.error_code == "upstream_blocked":
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=exc.message or "Target Moodle server blocked direct verification from the backend.",
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=exc.message or "MoodleSession cookie is invalid or expired.",

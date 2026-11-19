@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from app.core.exceptions import MoodleException
+from app.core.exceptions import MoodleAuthError, MoodleConnectionError, MoodleException
 from app.core.security import get_current_user_session
 from app.models.assignment import AssignmentItem, AssignmentListResponse
 from app.services.academic_cache import get_academic_cache
@@ -75,9 +75,21 @@ async def get_my_assignments(
             auth_type=auth_type,
             sesskey=sesskey,
         )
+    except MoodleAuthError as exc:
+        if exc.error_code == "upstream_blocked":
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=exc.message or "Moodle session expired.",
+        )
+    except MoodleConnectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=exc.message or "Could not reach Moodle.",
+        )
     except MoodleException as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Moodle error fetching assignments: {exc.message}",
         )
 

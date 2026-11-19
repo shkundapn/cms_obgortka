@@ -618,12 +618,13 @@ html:has(#workspace-main > .settings-sections) { scrollbar-gutter: stable; }
 #workspace-main .page-heading h1[tabindex="-1"]:focus { outline: 0; }
 .desk-layout { grid-template-areas: "stats stats" "focus side" "work side"; grid-template-rows: auto auto 1fr; }
 .compact-desk-layout { grid-template-areas: "stats stats" "work side"; grid-template-rows: auto auto; }
-.paper-course-header { margin-bottom: 1.15rem; }
+.paper-course-header { margin-bottom: 1.15rem; min-width: 0; max-width: 100%; }
 .paper-course-context { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem 1rem; }
 .paper-course-header-actions:not(:has(> *)) { display: none; }
-.paper-course-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; align-items: center; min-width: 0; max-width: 100%; }
+.paper-course-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; align-items: center; min-width: 0; max-width: 100%; flex-shrink: 0; }
 .paper-course-context .paper-course-header-actions { margin-inline-start: auto; }
 .paper-course-header .paper-course-actions {
+  flex: 0 1 auto;
   flex-wrap: nowrap;
   gap: .2rem;
   min-width: 0;

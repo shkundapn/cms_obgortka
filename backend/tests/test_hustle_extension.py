@@ -34,6 +34,7 @@ def test_package_uses_configured_origin_not_request_host(monkeypatch):
         manifest = json.loads(archive.read('Hustle/manifest.json'))
         bridge = next(s for s in manifest['content_scripts'] if 'hustle-bridge.js' in s['js'])
         assert 'https://study.example.edu/hustle/*' in bridge['matches']
+        assert 'https://study.example.edu/prototype/*' in bridge['matches']
         assert b'untrusted.example' not in archive.read('Hustle/hustle-config.js')
         assert 'https://study.example.edu/*' in manifest['host_permissions']
 

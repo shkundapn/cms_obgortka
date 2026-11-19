@@ -4,9 +4,13 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 
 function createHarness() {
-  const el=()=>({addEventListener(){},querySelector:()=>null,querySelectorAll:()=>[],classList:{add(){},remove(){}},dataset:{},innerHTML:''});
+  const el=()=>({listeners:new Map(),addEventListener(type, listener){this.listeners.set(type,listener);},querySelector:()=>null,querySelectorAll:()=>[],classList:{add(){},remove(){}},dataset:{},innerHTML:''});
+  const main = el(), dialog = el(), body = el();
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; dialog.listeners.get('close')(); };
+  const elements = {'#workspace-main': main, '#study-dialog': dialog, '#dialog-body': body};
   const context={
-    Intl,Date,Map,Set,URL,URLSearchParams,
+    Intl,Date,Map,Set,URL,URLSearchParams,Math:Object.create(Math),
     location:{hash:'#course/9400/practice',origin:'https://hustle.pp.ua'},
     matchMedia:()=>({matches:false}),
     UI:{
@@ -19,7 +23,7 @@ function createHarness() {
       countLabel:(n,one,few,many)=>`${n} ${n%10===1&&n%100!==11?one:n%10>=2&&n%10<=4&&(n%100<12||n%100>14)?few:many}`,
       date:()=>''
     },
-    document:{querySelector:()=>el(),addEventListener(){}},
+    document:{querySelector:selector=>elements[selector]||el(),addEventListener(){}},
     window:{addEventListener(){},dispatchEvent(){}},
     HustleSpace:{overview:()=>'',topicActions:()=>''},
     HustleCourse:{manage:()=>'',activity:()=>''},
@@ -27,6 +31,8 @@ function createHarness() {
   };
   context.window.window=context.window;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync('frontend/prototype/study-core.js','utf8'),context);
+  context.window.HustleStudy=context.HustleStudy;
   vm.runInContext(fs.readFileSync('frontend/hustle/study-navigation.js','utf8'),context);
   context.HustleCurriculum=context.window.HustleCurriculum;
   vm.runInContext(fs.readFileSync('frontend/hustle/learning.js','utf8'),context);
@@ -87,4 +93,66 @@ test('manual upload courses without course_map retain practiceCards list',()=>{
   const html=ctx.window.HustleLearning.renderBundle(manual,'practice');
   assert.match(html,/class="practice-course"/);
   assert.match(html,/data-study="cards" data-mix="own-1"/);
+});
+
+test('topic quizzes reshuffle per attempt and preserve grading across rerenders', async () => {
+  const ctx = createHarness();
+  const body = ctx.document.querySelector('#dialog-body');
+  const click = (selector, dataset) => body.listeners.get('click')({
+    target: {closest: query => query === selector ? {dataset} : null},
+  });
+  const order = () => Array.from(body.innerHTML.matchAll(/data-option="(\d+)"/g), match => Number(match[1]));
+  const question = {
+    question: 'What is an event?',
+    options: Object.freeze(['A set of outcomes', 'A constant', 'A distribution']),
+    correct_index: 0,
+    explanation: 'An event is a set of outcomes.',
+  };
+  const open = () => ctx.window.HustleLearning.openTopicPractice(sampleBundle, 'quiz', 'mix-t1', [question]);
+
+  ctx.Math.random = () => 0;
+  open();
+  assert.deepEqual(order(), [1, 2, 0]);
+  assert.match(body.innerHTML, /data-option="0"[^>]*><span>3<\/span>A set of outcomes/);
+
+  ctx.Math.random = () => 0.99;
+  await click('[data-option]', {option: '0'});
+  assert.deepEqual(order(), [1, 2, 0]);
+  assert.match(body.innerHTML, /data-option="0" aria-pressed="true"/);
+
+  ctx.UI.post = async () => { throw new Error('Retry the save'); };
+  await click('[data-check]');
+  assert.deepEqual(order(), [1, 2, 0]);
+  assert.match(body.innerHTML, /Retry the save/);
+
+  let attempt;
+  ctx.UI.post = async (path, payload) => { attempt = {path, payload}; };
+  await click('[data-check]');
+  assert.deepEqual(order(), [1, 2, 0]);
+  assert.match(body.innerHTML, /class="quiz-option correct" data-option="0"/);
+  assert.equal(attempt.path, '/api/workspace/mixes/mix-t1/quiz-attempt');
+  assert.equal(attempt.payload.chosen_index, 0);
+  assert.equal(attempt.payload.correct_index, 0);
+
+  await click('[data-study-close]');
+  open();
+  assert.deepEqual(order(), [0, 1, 2]);
+});
+
+test('module quizzes keep option order and original radio values on rerender', () => {
+  const ctx = createHarness();
+  ctx.UI.route = () => ({});
+  vm.runInContext(fs.readFileSync('frontend/hustle/textbook-modules.js','utf8'),ctx);
+  const topic = sampleBundle.topic_mixes[1];
+  const blocks = [{heading: 'Events', module_id: 'events'}];
+  const render = () => ctx.window.HustleModules.renderDedicatedModulePage(sampleBundle, topic, blocks, 0);
+  const order = html => Array.from(html.matchAll(/value="(\d+)" data-tm-quiz-opt/g), match => Number(match[1]));
+
+  ctx.Math.random = () => 0;
+  const html = render();
+  assert.deepEqual(order(html), [1, 0]);
+  assert.match(html, /value="0" data-tm-quiz-opt="0"[^>]*>\s*<span>Subset of sample space<\/span>/);
+
+  ctx.Math.random = () => 0.99;
+  assert.deepEqual(order(render()), [1, 0]);
 });

@@ -158,7 +158,8 @@
     const verified = window.HustleCurriculum?HustleCurriculum.practiceTopics(activeBundle).find(t=>t.mix_id===mixId):topic;
     const items = selectedItems ?? (type==='exam'?activeBundle.exam_mix?.mock_exam_questions:type==='cards'?verified?.flashcards:verified?.quizzes);
     if(!items?.length) return;
-    practice = {type,items,topic,courseId:activeBundle.course.course_id,index:0,score:0,selected:null,checked:false,revealed:false,saving:false,error:'',epoch:++viewVersion};
+    const optionOrders = type === 'cards' ? null : items.map(item => window.HustleStudy.shuffledOptionIndices(item.options));
+    practice = {type,items,optionOrders,topic,courseId:activeBundle.course.course_id,index:0,score:0,selected:null,checked:false,revealed:false,saving:false,error:'',epoch:++viewVersion};
     drawPractice(); focusPractice(); dialog.showModal(); focusPractice();
   }
   function focusPractice() {
@@ -202,7 +203,12 @@
     }
     const citation = item.source_citation ? `<div class="topic-card-source">Джерело · ${esc(item.source_citation)}</div>` : '';
     const isLearnedCard=p.type==='cards'&&(p.learnedSet?.has(p.index)||window.HustleAnki?.isLearnedSync?.(item.front,activeBundle?.course?.course_id,p.topic.topic_index));
-    body.innerHTML=`<div class="study-position"><span>${p.index+1} / ${p.items.length}</span><div><i style="width:${(p.index+1)/p.items.length*100}%"></i></div></div><h2 id="dialog-title">${math(p.type==='cards'?item.front:item.question)}</h2>${p.type==='cards'?`<div class="flashcard">${p.revealed?`<p>${math(item.back)}</p>`:'<button class="secondary" data-reveal>Показати відповідь</button>'}</div><div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.75rem;"><button type="button" class="secondary" data-mark-anki-learned>${isLearnedCard?'✓ Вивчена (у Anki)':'○ Позначити як вивчену (в Anki)'}</button>${p.revealed?'<button class="primary" style="flex:1;" data-next>Далі →</button>':''}</div>`:`<div class="quiz-options">${item.options.map((option,i)=>`<button class="quiz-option ${p.checked && i===item.correct_index?'correct':p.checked && i===p.selected?'incorrect':''}" data-option="${i}" aria-pressed="${i===p.selected}" ${p.checked||p.saving?'disabled':''}><span>${i+1}</span>${math(option)}</button>`).join('')}</div>${p.checked?`<div class="answer-block">${math(explanation)}${citation}${correction}</div><button class="primary wide" data-next>${p.index===p.items.length-1?'Результат':'Далі →'}</button>`:`<button class="primary wide" data-check ${p.selected===null||p.saving?'disabled':''}>${p.saving?'Зберігаємо…':'Перевірити'}</button>`}`}<p role="alert" class="field-error">${esc(p.error)}</p>`;
+    const quizOptions = p.optionOrders?.[p.index].map((optionIndex, displayIndex) => {
+      const selected = optionIndex === p.selected;
+      const feedback = p.checked && optionIndex === item.correct_index ? 'correct' : p.checked && selected ? 'incorrect' : '';
+      return `<button class="quiz-option ${feedback}" data-option="${optionIndex}" aria-pressed="${selected}" ${p.checked||p.saving?'disabled':''}><span>${displayIndex+1}</span>${math(item.options[optionIndex])}</button>`;
+    }).join('');
+    body.innerHTML=`<div class="study-position"><span>${p.index+1} / ${p.items.length}</span><div><i style="width:${(p.index+1)/p.items.length*100}%"></i></div></div><h2 id="dialog-title">${math(p.type==='cards'?item.front:item.question)}</h2>${p.type==='cards'?`<div class="flashcard">${p.revealed?`<p>${math(item.back)}</p>`:'<button class="secondary" data-reveal>Показати відповідь</button>'}</div><div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.75rem;"><button type="button" class="secondary" data-mark-anki-learned>${isLearnedCard?'✓ Вивчена (у Anki)':'○ Позначити як вивчену (в Anki)'}</button>${p.revealed?'<button class="primary" style="flex:1;" data-next>Далі →</button>':''}</div>`:`<div class="quiz-options">${quizOptions}</div>${p.checked?`<div class="answer-block">${math(explanation)}${citation}${correction}</div><button class="primary wide" data-next>${p.index===p.items.length-1?'Результат':'Далі →'}</button>`:`<button class="primary wide" data-check ${p.selected===null||p.saving?'disabled':''}>${p.saving?'Зберігаємо…':'Перевірити'}</button>`}`}<p role="alert" class="field-error">${esc(p.error)}</p>`;
     UI.enhance?.(body);
   }
   main.addEventListener('input',event=>{

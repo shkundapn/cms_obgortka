@@ -79,5 +79,13 @@
     const start = addDays(first, -(day + 6) % 7);
     return Array.from({ length: 42 }, (_, i) => addDays(start, i));
   }
-  return { zone, dateKey, addDays, deadline, urgency, deadlineTiming, deadlineWarmth, deadlineHeat, deadlineRemaining, secondsLabel, remaining, splitInterval, sum, monthDays };
+  function shuffledOptionIndices(options) {
+    const order = options.map((_, index) => index);
+    for (let index = order.length - 1; index > 0; index--) {
+      const swapIndex = Math.floor(Math.random() * (index + 1));
+      [order[index], order[swapIndex]] = [order[swapIndex], order[index]];
+    }
+    return order;
+  }
+  return { zone, dateKey, addDays, deadline, urgency, deadlineTiming, deadlineWarmth, deadlineHeat, deadlineRemaining, secondsLabel, remaining, splitInterval, sum, monthDays, shuffledOptionIndices };
 });

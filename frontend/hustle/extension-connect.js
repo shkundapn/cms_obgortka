@@ -30,11 +30,21 @@
   if(event.data.success)request.resolve(event.data);else request.reject(new Error(event.data.error||'Не вдалося підключитися.'));
  });
  function error(err) {stopConnectProgress();$('#extension-error').textContent=err.message;$('#extension-error').hidden=false;}
- function success() {waiting=false;stopConnectProgress();$('#extension-success').hidden=false;$('#extension-connect-form').hidden=true;$('#extension-install').hidden=true;$('#extension-status').textContent='';$('#extension-error').hidden=true;}
+ function success() {waiting=false;stopConnectProgress();$('#extension-success').hidden=false;$('#extension-connect-form').hidden=true;$('#extension-install').hidden=false;$('#extension-status').textContent='';$('#extension-error').hidden=true;}
  async function detect() {
   if(checking || document.hidden)return;checking=true;
-  try {await extension('PING');installed=true;$('#extension-install').hidden=true;if(!waiting && !busy)$('#extension-status').textContent='Розширення встановлено';}
-  catch {installed=false;$('#extension-install').hidden=false;if(!waiting && !busy)$('#extension-status').textContent='Встанови розширення один раз — далі без токенів.';}
+  try {
+   await extension('PING');installed=true;$('#extension-install').hidden=false;
+   $('#extension-download').className='secondary wide';
+   if(!config?.store_url)$('#extension-download').textContent='Завантажити / оновити розширення ↓';
+   if(!waiting && !busy)$('#extension-status').textContent='Розширення встановлено';
+  }
+  catch {
+   installed=false;$('#extension-install').hidden=false;
+   $('#extension-download').className='primary wide';
+   if(!config?.store_url)$('#extension-download').textContent='Завантажити розширення ↓';
+   if(!waiting && !busy)$('#extension-status').textContent='Встанови розширення один раз — далі без токенів.';
+  }
   finally {$('#connect-moodle').disabled=!installed||busy;checking=false;}
  }
  async function pollConnection() {
